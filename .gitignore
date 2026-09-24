@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# scratch produced by the review workflow when run locally
+.review-base/
+.review-prompts/
+.review-candidates.md
+review-output.md
+# demo run artefacts
+demo/results/*.local.*

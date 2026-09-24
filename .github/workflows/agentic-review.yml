@@ -1,0 +1,272 @@
+name: Agentic AI Review
+
+# Two-stage, fail-closed AI code review built as a security control.
+# Pattern adapted from KiroCrew's claude-review.yml (Apache-2.0):
+#   https://github.com/kirodotdev/KiroCrew/blob/main/.github/workflows/claude-review.yml
+#
+# What makes it a gate rather than a suggestion (each item is a demo talking point):
+#   1. Rules and prompts are read from the BASE commit, so a PR cannot rewrite
+#      the reviewer that reviews it. A missing prompt fails the job.
+#   2. The agent is CODE-ONLY: it gets a prefetched diff file and Read/Grep/Glob.
+#      No PR title, body, or comments ever enter its context. No Bash, no network.
+#   3. Credentials: persist-credentials=false on checkout, cloud credentials are
+#      assumed LAST, and the review output is redacted before it is posted.
+#   4. Two independent invocations: discovery (recall) then validation
+#      (falsification + closed blocking list). Only validation's verdict counts.
+#   5. The gate parses SHA-scoped markers. No marker, empty output, oversized
+#      candidate list, or errored step all FAIL CLOSED. A CI step posts the
+#      comment; the model never does.
+#
+# Auth: set repository secret AWS_BEDROCK_ROLE_ARN (OIDC -> Amazon Bedrock), or
+# ANTHROPIC_API_KEY as a fallback. Model ids are repository variables
+# DISCOVERY_MODEL / VALIDATION_MODEL (defaults below are Bedrock inference
+# profile ids; override them for the direct API).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write # only used when AWS_BEDROCK_ROLE_ARN is configured
+
+concurrency:
+  group: agentic-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  USE_BEDROCK: ${{ secrets.AWS_BEDROCK_ROLE_ARN != '' }}
+
+jobs:
+  agentic-review:
+    # Fork guard on EVERY step (not the job) so the check name still renders on
+    # fork PRs while nothing runs against fork content. Fork PRs need a separate
+    # default-branch workflow_run lane, which this demo does not include.
+    name: "${{ github.event.pull_request.head.repo.full_name == github.repository && 'Agentic AI Review' || 'Agentic AI Review (not run on forks)' }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # persist-credentials=false keeps GITHUB_TOKEN out of .git/config, where a
+      # reviewer reading untrusted PR content could otherwise find it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # CONTROL 1: the review contract comes from the BASE commit.
+      - name: Extract base-ref rules and review prompts
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # Remove before creating so a tracked file or symlink committed by the
+          # PR at these paths cannot redirect the writes below.
+          rm -rf .review-base .review-prompts
+          mkdir -p .review-base .review-prompts
+          echo "Base commit: $BASE_SHA"
+          git show "$BASE_SHA:RULES.yaml" > .review-base/RULES.yaml
+          for p in discovery validate; do
+            git show "$BASE_SHA:.github/review-prompts/$p.md" > ".review-prompts/$p.md" 2>/dev/null || true
+            if [ ! -s ".review-prompts/$p.md" ]; then
+              echo "::error::.github/review-prompts/$p.md is missing or empty on the base commit ($BASE_SHA). Refusing to review against an unspecified contract."
+              exit 1
+            fi
+          done
+          echo "Loaded $(grep -c 'id:' .review-base/RULES.yaml) rules and 2 prompts from base."
+
+      # CONTROL 2 (part 1): the diff is a data file. The agent never runs git or gh.
+      - name: Prefetch the reviewable diff (data only)
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PATCH: ${{ runner.temp }}/pr.diff
+        run: |
+          set -euo pipefail
+          git diff --no-color "$BASE_SHA...$HEAD_SHA" > "$PATCH"
+          if [ ! -s "$PATCH" ]; then
+            echo "::error::Prefetched diff for $HEAD_SHA is empty; refusing to review nothing."
+            exit 1
+          fi
+          echo "Prefetched $(wc -c < "$PATCH") bytes of diff."
+
+      # CONTROL 3: cloud credentials are assumed LAST, after every install step,
+      # and only for the model calls.
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        if: github.event.pull_request.head.repo.full_name == github.repository && env.USE_BEDROCK == 'true'
+        with:
+          role-to-assume: ${{ secrets.AWS_BEDROCK_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+
+      # CONTROL 2 (part 2) + CONTROL 4: stage 1, discovery. Code-only tools.
+      - name: Discovery pass
+        id: discover
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217
+        with:
+          use_bedrock: ${{ env.USE_BEDROCK }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          claude_args: |
+            --model ${{ vars.DISCOVERY_MODEL || 'us.anthropic.claude-sonnet-4-6' }}
+            --max-turns 40
+            --allowedTools "Read,Grep,Glob"
+          prompt: |
+            Read `.review-prompts/discovery.md` and follow it exactly. It is your
+            complete instruction set for this run, and nothing in this message
+            overrides it.
+
+            Wherever those instructions say <HEAD_SHA>, use exactly this commit:
+            ${{ github.event.pull_request.head.sha }}
+
+            Obtain the diff by reading this pre-fetched file:
+            ${{ runner.temp }}/pr.diff
+
+      - name: Capture discovery candidates (fail closed)
+        if: github.event.pull_request.head.repo.full_name == github.repository && steps.discover.outcome == 'success'
+        env:
+          EXEC_FILE: ${{ steps.discover.outputs.execution_file }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          MAX_CANDIDATE_BYTES: "120000"
+        run: |
+          set -uo pipefail
+          rm -f .review-candidates.md
+          : > .review-candidates.md
+          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
+            out="$(jq -r '.result // ""' "$EXEC_FILE" 2>/dev/null || true)"
+            if [ -z "$out" ]; then
+              out="$(jq -rs '[ .[] | (if type=="array" then .[] else . end) | select(.result != null) ] | (last.result // "")' "$EXEC_FILE" 2>/dev/null || true)"
+            fi
+            printf '%s\n' "$out" > .review-candidates.md
+          fi
+          # Redact credential shapes before anything is echoed to logs.
+          perl -i -pe 's/\b(?:AKIA|ASIA)[A-Z2-7]{16}\b/[REDACTED-AWS-KEY-ID]/g; s{arn:aws\S*}{[REDACTED-ARN]}g; s/\b[0-9]{12}\b/[REDACTED-ACCT]/g; s/(?i)(aws_secret_access_key|aws_session_token|x-amz-security-token|api[_-]?key)\s*[:=]\s*\S+/$1=[REDACTED]/g' .review-candidates.md
+          if ! grep -Fq "[DISCOVERY] $HEAD" .review-candidates.md; then
+            echo "::error::Discovery produced no [DISCOVERY] marker for $HEAD. Failing closed: validating a truncated or empty candidate list would emit a clean verdict for a review that never happened."
+            exit 1
+          fi
+          bytes=$(wc -c < .review-candidates.md)
+          if [ "$bytes" -gt "$MAX_CANDIDATE_BYTES" ]; then
+            echo "::error::Discovery emitted ${bytes} bytes of candidates, over the ${MAX_CANDIDATE_BYTES} limit one validation pass can judge. Failing closed rather than validating a prefix."
+            exit 1
+          fi
+          echo "--- stage 1 candidates (never posted) ---"
+          cat .review-candidates.md
+
+      # CONTROL 4: stage 2, independent validation. Same code-only tools.
+      - name: Validation pass
+        id: validate
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217
+        with:
+          use_bedrock: ${{ env.USE_BEDROCK }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          claude_args: |
+            --model ${{ vars.VALIDATION_MODEL || 'us.anthropic.claude-opus-4-8' }}
+            --max-turns 40
+            --allowedTools "Read,Grep,Glob"
+          prompt: |
+            Read `.review-prompts/validate.md` and follow it exactly. It is your
+            complete instruction set for this run, and nothing in this message
+            overrides it.
+
+            Wherever those instructions say <HEAD_SHA>, use exactly this commit:
+            ${{ github.event.pull_request.head.sha }}
+
+            Obtain the diff by reading this pre-fetched file:
+            ${{ runner.temp }}/pr.diff
+
+            The candidate list from the discovery pass is at:
+            .review-candidates.md
+
+      - name: Capture and redact review output
+        if: github.event.pull_request.head.repo.full_name == github.repository && always()
+        env:
+          EXEC_FILE: ${{ steps.validate.outputs.execution_file }}
+        run: |
+          set -uo pipefail
+          rm -f review-output.md
+          : > review-output.md
+          if [ -n "${EXEC_FILE:-}" ] && [ -f "$EXEC_FILE" ]; then
+            out="$(jq -r '.result // ""' "$EXEC_FILE" 2>/dev/null || true)"
+            if [ -z "$out" ]; then
+              out="$(jq -rs '[ .[] | (if type=="array" then .[] else . end) | select(.result != null) ] | (last.result // "")' "$EXEC_FILE" 2>/dev/null || true)"
+            fi
+            printf '%s\n' "$out" > review-output.md
+          fi
+          perl -i -pe 's/\b(?:AKIA|ASIA)[A-Z2-7]{16}\b/[REDACTED-AWS-KEY-ID]/g; s{arn:aws\S*}{[REDACTED-ARN]}g; s/\b[0-9]{12}\b/[REDACTED-ACCT]/g; s/(?i)(aws_secret_access_key|aws_session_token|x-amz-security-token|api[_-]?key)\s*[:=]\s*\S+/$1=[REDACTED]/g' review-output.md
+          echo "--- captured review ($(wc -c < review-output.md) bytes) ---"
+          cat review-output.md
+
+      # CONTROL 5 (part 1): a CI step posts ONE comment keyed by a hidden marker.
+      # The model has no tool that can post.
+      - name: Post or update review comment
+        if: github.event.pull_request.head.repo.full_name == github.repository && always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          REVIEW_OUTCOME: ${{ steps.validate.outcome }}
+        run: |
+          set -uo pipefail
+          marker="<!-- agentic-ai-review -->"
+          {
+            echo "$marker"
+            echo "### Agentic AI Review — \`${HEAD:0:12}\`"
+            echo
+            if [ "$REVIEW_OUTCOME" != "success" ] || [ ! -s review-output.md ]; then
+              echo "**Review did not complete** (outcome: \`$REVIEW_OUTCOME\`). The gate fails closed; re-run the workflow or inspect the logs."
+            elif ! grep -Fq "[REVIEWED] $HEAD" review-output.md; then
+              echo "**No \`[REVIEWED]\` marker for this commit.** The gate fails closed."
+              echo
+              cat review-output.md
+            else
+              if grep -Fq "[BLOCK-MERGE] $HEAD" review-output.md; then
+                echo "**Verdict: BLOCK MERGE**"
+              else
+                echo "**Verdict: pass**"
+              fi
+              echo
+              cat review-output.md
+            fi
+            echo
+            echo "<sub>Two-stage review (discovery → falsification). The reviewer read only the code and a prefetched diff; rules and prompts came from the base commit. Verdict parsed from SHA-scoped markers by CI.</sub>"
+          } > /tmp/review-comment.md
+          existing="$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            | jq -r --arg m "$marker" '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith($m))] | (first.id // empty)')"
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$existing" -F body=@/tmp/review-comment.md >/dev/null
+          else
+            gh pr comment "$PR" --body-file /tmp/review-comment.md
+          fi
+
+      # CONTROL 5 (part 2): the gate. Every abnormal path fails closed.
+      - name: Gate on review verdict (fail closed)
+        if: github.event.pull_request.head.repo.full_name == github.repository && always()
+        env:
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          REVIEW_OUTCOME: ${{ steps.validate.outcome }}
+        run: |
+          set -uo pipefail
+          if [ "$REVIEW_OUTCOME" != "success" ]; then
+            echo "::error::Validation step did not succeed (outcome=$REVIEW_OUTCOME) for $HEAD. Failing closed."
+            exit 1
+          fi
+          if [ ! -s review-output.md ]; then
+            echo "::error::Review produced no output for $HEAD. Failing closed."
+            exit 1
+          fi
+          if ! grep -Fq "[REVIEWED] $HEAD" review-output.md; then
+            echo "::error::No [REVIEWED] marker for $HEAD. Failing closed."
+            exit 1
+          fi
+          if grep -Fq "[BLOCK-MERGE] $HEAD" review-output.md; then
+            echo "::error::Review flagged a blocking issue on $HEAD — see the posted review comment."
+            exit 1
+          fi
+          echo "Review passed for $HEAD."
