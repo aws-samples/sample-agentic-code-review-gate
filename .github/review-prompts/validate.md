@@ -1,4 +1,4 @@
-# Hardened review — VALIDATION pass (authoritative)
+# Agentic review — VALIDATION pass (authoritative)
 
 <!--
 Adapted from KiroCrew's `.github/review-prompts/opus-validate.md`
