@@ -9,3 +9,4 @@ __pycache__/
 review-output.md
 # demo run artefacts
 demo/results/*.local.*
+.ash/
