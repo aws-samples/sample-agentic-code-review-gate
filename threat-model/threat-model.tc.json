@@ -1,0 +1,3943 @@
+{
+  "schema": 1,
+  "applicationInfo": {
+    "name": "Threat Model Export",
+    "description": "Public, Apache-2.0 sample repository (sample-agentic-code-review-gate) built for a security-conference demo. It shows an AI code reviewer designed as a fail-closed security control: a GitHub Actions workflow (.github/workflows/agentic-review.yml) runs two independent Claude model calls (discovery, then falsification/validation) against every same-repo pull request, using Amazon Bedrock via GitHub OIDC (secret AWS_BEDROCK_ROLE_ARN) or the Anthropic API (secret ANTHROPIC_API_KEY). Rules (RULES.yaml) and prompts (.github/review-prompts/*.md) are read from the PR BASE commit; the agent is code-only (Read/Grep/Glob) with a prefetched diff; a CI step parses SHA-scoped markers ([REVIEWED]/[BLOCK-MERGE]) and posts one PR comment; every abnormal path fails closed. The review target is a tiny Python asset service (app/files.py path containment, app/tokens.py constant-time token check with redacted logging) that is deliberately attacked by four demo PRs (guard removal, prompt injection, rules disarming, CI credential exfiltration). The README also describes a deliberately insecure naive lane and demo tooling that are not present in this checkout. Business value: reputational (a security sample must not itself be exploitable) and educational; the assets that matter are the integrity of the merge gate, the cloud/API credentials the workflow holds, and the cost of model invocations."
+  },
+  "architecture": {
+    "description": ""
+  },
+  "dataflow": {
+    "description": ""
+  },
+  "assumptions": [
+    {
+      "id": "A001",
+      "numericId": 1,
+      "content": "The repository is public and Apache-2.0 licensed; the source code and the PR diffs have no confidentiality requirement. Confidentiality concerns are limited to the workflow credentials.",
+      "displayOrder": 1,
+      "metadata": []
+    },
+    {
+      "id": "A002",
+      "numericId": 2,
+      "content": "The system under analysis is the AI review gate (agentic-review.yml, review prompts, RULES.yaml, ci.yml). The Python app under app/ is the demo review target and is not deployed as a service anywhere.",
+      "displayOrder": 2,
+      "metadata": []
+    },
+    {
+      "id": "A003",
+      "numericId": 3,
+      "content": "Files referenced by the README but absent from this checkout (naive-review.yml, demo/, tests/, talk/) are out of scope. In particular the deliberately insecure naive lane is not analysed.",
+      "displayOrder": 3,
+      "metadata": []
+    },
+    {
+      "id": "A004",
+      "numericId": 4,
+      "content": "The workflow runs on GitHub-hosted ubuntu-latest runners and calls Amazon Bedrock in vars.AWS_REGION (default us-west-2) through an IAM role assumed via GitHub OIDC. The Anthropic API path is a fallback the maintainer may configure instead.",
+      "displayOrder": 4,
+      "metadata": []
+    },
+    {
+      "id": "A005",
+      "numericId": 5,
+      "content": "Branch protection (or a ruleset) on main requires the 'Agentic AI Review' and 'Unit tests' status checks, requires a PR, and has admin bypass disabled. Without this, the gate is advisory.",
+      "displayOrder": 5,
+      "metadata": []
+    },
+    {
+      "id": "A006",
+      "numericId": 6,
+      "content": "The IAM role for AWS_BEDROCK_ROLE_ARN trusts only this repository's OIDC subject (repo:<owner>/<repo>:pull_request or narrower) and grants only bedrock:InvokeModel* on the inference profiles used.",
+      "displayOrder": 6,
+      "metadata": []
+    },
+    {
+      "id": "A007",
+      "numericId": 7,
+      "content": "The primary adversary is a same-repository contributor with write access (or an attacker holding such an account), because only same-repo PRs run the workflow with secrets.",
+      "displayOrder": 7,
+      "metadata": []
+    },
+    {
+      "id": "A008",
+      "numericId": 8,
+      "content": "The financial impact of a compromise is bounded by model invocation cost within the Bedrock role's permissions plus reputational damage to a security sample; no customer data or revenue-bearing system is involved.",
+      "displayOrder": 8,
+      "metadata": []
+    },
+    {
+      "id": "A009",
+      "numericId": 9,
+      "content": "The IAM role trust policy for AWS_BEDROCK_ROLE_ARN sets both token.actions.githubusercontent.com:aud = sts.amazonaws.com and a token.actions.githubusercontent.com:sub condition scoped to this repository (e.g. repo:<owner>/<repo>:pull_request), per AWS guidance that an unscoped sub lets any GitHub organization or repository assume the role. Reference: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html",
+      "displayOrder": 9,
+      "metadata": []
+    },
+    {
+      "id": "A010",
+      "numericId": 10,
+      "content": "The role's permission policy grants only bedrock:InvokeModel and bedrock:InvokeModelWithResponseStream on the specific inference-profile and foundation-model ARNs used (default profiles us.anthropic.claude-sonnet-4-6 and us.anthropic.claude-opus-4-8), following AWS's least-privilege examples for Bedrock model access. Reference: https://aws.amazon.com/blogs/security/simplified-amazon-bedrock-model-access/",
+      "displayOrder": 10,
+      "metadata": []
+    },
+    {
+      "id": "A011",
+      "numericId": 11,
+      "content": "anthropics/claude-code-action, in prompt-driven mode with --allowedTools Read,Grep,Glob, does not expose any tool that performs network egress or GitHub API writes to the model, and does not inject PR title/body into the model context. The github_token input is used only by the action's own plumbing.",
+      "displayOrder": 11,
+      "metadata": []
+    },
+    {
+      "id": "A012",
+      "numericId": 12,
+      "content": "Nation-state, competitor, terrorist and cyber-mercenary actors are not relevant: the repository is a public demo with no proprietary data, no customers and no infrastructure beyond a model-invocation role.",
+      "displayOrder": 12,
+      "metadata": []
+    },
+    {
+      "id": "A013",
+      "numericId": 13,
+      "content": "Anyone able to open a same-repository pull request is treated as fully adversarial, regardless of employment relationship, because GitHub account compromise is common and the workflow cannot distinguish a compromised account from a malicious one.",
+      "displayOrder": 13,
+      "metadata": []
+    },
+    {
+      "id": "A026",
+      "numericId": 26,
+      "content": "GitHub masks registered secret values and the AWS credentials exported by configure-aws-credentials in step logs, but masking is exact-string based: values that are transformed (base64, split, reversed) or quoted by the model in a different form are not masked. The workflow's own perl redaction is therefore treated as the effective control for model output.",
+      "displayOrder": 26,
+      "metadata": []
+    },
+    {
+      "id": "A027",
+      "numericId": 27,
+      "content": "AWS STS session credentials issued to the role remain valid until their expiry (default 1 hour) even after the GitHub job finishes; the repository does not use a shorter role-duration-seconds.",
+      "displayOrder": 27,
+      "metadata": []
+    },
+    {
+      "id": "A028",
+      "numericId": 28,
+      "content": "SHA-scoped markers cannot be pre-planted in PR content: the head SHA depends on the content, so an author cannot commit a file containing '[REVIEWED] <head sha>' for that same commit. Marker forgery therefore requires steering the model (T001) or changing the workflow (T003), and replaying an earlier run's output is impossible.",
+      "displayOrder": 28,
+      "metadata": []
+    },
+    {
+      "id": "A029",
+      "numericId": 29,
+      "content": "Claude Code's --allowedTools 'Read,Grep,Glob' in non-interactive mode denies every other tool (Bash, Write, Edit, WebFetch, MCP tools) rather than merely skipping approval prompts; the README reports the denial as visible in transcripts.",
+      "displayOrder": 29,
+      "metadata": []
+    },
+    {
+      "id": "A030",
+      "numericId": 30,
+      "content": "The maintainer will apply the GitHub-side mitigations (CODEOWNERS on .github/** and RULES.yaml, rulesets without bypass, required check names) before relying on the gate for anything beyond the demo; these cannot be expressed in the repository's files and are therefore tracked as identified, not resolved.",
+      "displayOrder": 30,
+      "metadata": []
+    },
+    {
+      "id": "A031",
+      "numericId": 31,
+      "content": "anthropics/claude-code-action at the pinned SHA accepts a Claude Code settings/permissions input (or honours a checked-in .claude/settings.json) that can deny Read on specific paths; if it does not, the equivalent constraint requires running the agent in a container job with a minimal filesystem.",
+      "displayOrder": 31,
+      "metadata": []
+    },
+    {
+      "id": "A032",
+      "numericId": 32,
+      "content": "Risk acceptance criteria used in Phase 8: a threat is Accepted only where the README explicitly names the trade-off (cost of two model calls, nondeterministic verdicts, fail-closed outages) or where the impact is bounded to public code or human confusion without affecting the check run. Everything that could turn the gate green on attacker terms, or expose credentials, stays Open until the owner acts.",
+      "displayOrder": 32,
+      "metadata": []
+    },
+    {
+      "id": "A033",
+      "numericId": 33,
+      "content": "The residual-risk decisions recorded here are the analyst's proposals; the repository owner has not yet reviewed or approved them.",
+      "displayOrder": 33,
+      "metadata": []
+    }
+  ],
+  "mitigations": [
+    {
+      "id": "M031",
+      "numericId": 1,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: Review contract (RULES.yaml, discovery.md, validate.md) is loaded from the pull request BASE commit, never from the PR head; a missing or empty prompt fails the job.",
+      "displayOrder": 1,
+      "metadata": []
+    },
+    {
+      "id": "M032",
+      "numericId": 2,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: Code-only agent tool allow-list (Read, Grep, Glob) with a 40-turn cap in both passes; the agent has no execution or network tool.",
+      "displayOrder": 2,
+      "metadata": []
+    },
+    {
+      "id": "M033",
+      "numericId": 3,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: The diff is prefetched as a data file outside the checkout and the invocation prompt contains no PR title, body or comments; the agent never runs git or gh.",
+      "displayOrder": 3,
+      "metadata": []
+    },
+    {
+      "id": "M034",
+      "numericId": 4,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: Two independent model invocations (discovery then falsification) with prompts that treat in-diff text and the candidate list as untrusted, require code-grounded evidence, and limit BLOCKING to a closed list.",
+      "displayOrder": 4,
+      "metadata": []
+    },
+    {
+      "id": "M035",
+      "numericId": 5,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: Deterministic fail-closed gate on SHA-scoped markers; every abnormal path (errored step, empty output, missing marker, oversized candidates) exits 1, and a CI step, not the model, posts the single PR comment.",
+      "displayOrder": 5,
+      "metadata": []
+    },
+    {
+      "id": "M036",
+      "numericId": 6,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: Credential hygiene: checkout token not persisted, minimal job permissions, cloud credentials assumed last and only when Bedrock is configured.",
+      "displayOrder": 6,
+      "metadata": []
+    },
+    {
+      "id": "M037",
+      "numericId": 7,
+      "status": "mitigationInProgress",
+      "content": "IMPLEMENTED (partial): Regex redaction of AWS key ids, ARNs, 12-digit account ids and labelled secret values in model output before it is logged or posted, on top of GitHub's exact-string secret masking.",
+      "displayOrder": 7,
+      "metadata": []
+    },
+    {
+      "id": "M038",
+      "numericId": 8,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: Fork guard on every step plus a distinct job name for fork PRs, relying on GitHub withholding secrets from fork-triggered pull_request events.",
+      "displayOrder": 8,
+      "metadata": []
+    },
+    {
+      "id": "M039",
+      "numericId": 9,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: All third-party actions pinned to full commit SHAs with version comments; Python test dependencies version-pinned.",
+      "displayOrder": 9,
+      "metadata": []
+    },
+    {
+      "id": "M040",
+      "numericId": 10,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: Scratch paths are removed before being recreated and the diff lives under $RUNNER_TEMP, so PR-committed files or symlinks at those paths cannot redirect writes or pre-seed gate inputs.",
+      "displayOrder": 10,
+      "metadata": []
+    },
+    {
+      "id": "M041",
+      "numericId": 11,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: Blocking rule 'rules-may-only-tighten' makes any weakening of RULES.yaml, the prompts or the workflow a BLOCKING finding when reviewed against the base contract.",
+      "displayOrder": 11,
+      "metadata": []
+    },
+    {
+      "id": "M042",
+      "numericId": 12,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED (partial): Per-PR concurrency cancellation, 30-minute job timeout, 40-turn cap per pass and a candidate-size cap bound the cost of a single PR's review.",
+      "displayOrder": 12,
+      "metadata": []
+    },
+    {
+      "id": "M043",
+      "numericId": 13,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: Demo app guards: resolved-path containment (follows symlinks), absolute/empty path rejection, constant-time token comparison and prefix-only token logging.",
+      "displayOrder": 13,
+      "metadata": []
+    },
+    {
+      "id": "M044",
+      "numericId": 14,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: Blocking rules no-guard-removal and no-secret-logging give the reviewer an explicit checklist for the two app guards, including the specific weak replacements attackers use.",
+      "displayOrder": 14,
+      "metadata": []
+    },
+    {
+      "id": "M045",
+      "numericId": 15,
+      "status": "mitigationResolved",
+      "content": "IMPLEMENTED: The unit-test job that executes PR code runs with a read-only token, no repository secrets and a non-persisted checkout credential.",
+      "displayOrder": 15,
+      "metadata": []
+    },
+    {
+      "id": "M046",
+      "numericId": 16,
+      "status": "mitigationIdentified",
+      "content": "Protect .github/** and RULES.yaml with CODEOWNERS plus a branch ruleset that requires code-owner review and forbids bypass, so a PR cannot merge a modified reviewer without a second human.",
+      "displayOrder": 16,
+      "metadata": []
+    },
+    {
+      "id": "M047",
+      "numericId": 17,
+      "status": "mitigationIdentified",
+      "content": "Move the privileged review job to a default-branch-defined workflow_run lane that consumes the PR diff as an artifact, so the code that reviews a PR can never be edited by that PR (and fork PRs can be reviewed safely).",
+      "displayOrder": 17,
+      "metadata": []
+    },
+    {
+      "id": "M048",
+      "numericId": 18,
+      "status": "mitigationIdentified",
+      "content": "Verify branch protection/rulesets on main: required checks match the current job names exactly, no admin bypass, PR required; pin the check name in the workflow-invariants test.",
+      "displayOrder": 18,
+      "metadata": []
+    },
+    {
+      "id": "M049",
+      "numericId": 19,
+      "status": "mitigationIdentified",
+      "content": "Harden the Bedrock IAM role: repository-scoped OIDC subject and audience conditions, InvokeModel-only permissions on the exact inference-profile/foundation-model ARNs, and the shortest practical session duration.",
+      "displayOrder": 19,
+      "metadata": []
+    },
+    {
+      "id": "M050",
+      "numericId": 20,
+      "status": "mitigationIdentified",
+      "content": "Add cost and misuse monitoring: Bedrock budget and invocation alarms, model invocation logging with restricted access, CloudTrail alerting on role assumption, GitHub Actions spending limit, and trigger filters that skip draft or docs-only PRs.",
+      "displayOrder": 20,
+      "metadata": []
+    },
+    {
+      "id": "M051",
+      "numericId": 21,
+      "status": "mitigationIdentified",
+      "content": "Constrain what the agent's Read tool can reach: deny-list /proc, home, temp and .git paths via Claude Code permission settings, drop the unused ANTHROPIC_API_KEY input when Bedrock is active, and consider a container job with a minimal filesystem.",
+      "displayOrder": 21,
+      "metadata": []
+    },
+    {
+      "id": "M052",
+      "numericId": 22,
+      "status": "mitigationIdentified",
+      "content": "Treat secret-shaped content in model output as a gate failure rather than something to redact: broaden the patterns (raw AWS secret keys, GitHub and Anthropic token prefixes, JWTs, long base64 blobs) and withhold the output entirely when they match.",
+      "displayOrder": 22,
+      "metadata": []
+    },
+    {
+      "id": "M053",
+      "numericId": 23,
+      "status": "mitigationIdentified",
+      "content": "Add an upper bound on reviewable diff size and reject Trojan-Source characters, so an attacker cannot exhaust the agents' turns or context to hide a small change.",
+      "displayOrder": 23,
+      "metadata": []
+    },
+    {
+      "id": "M054",
+      "numericId": 24,
+      "status": "mitigationIdentified",
+      "content": "Close the run-time install gap: pin the Claude Code CLI version, hash-pin Python test dependencies, and review action updates through Dependabot before adopting new SHAs.",
+      "displayOrder": 24,
+      "metadata": []
+    },
+    {
+      "id": "M055",
+      "numericId": 25,
+      "status": "mitigationIdentified",
+      "content": "Preserve an audit trail independent of editable PR comments: upload the redacted outputs and execution transcript as workflow artifacts and reference run id and SHA in the comment.",
+      "displayOrder": 25,
+      "metadata": []
+    },
+    {
+      "id": "M056",
+      "numericId": 26,
+      "status": "mitigationIdentified",
+      "content": "Measure the reviewer empirically against the attack corpus after every model, prompt or action change, and pin model ids so behaviour changes are deliberate.",
+      "displayOrder": 26,
+      "metadata": []
+    },
+    {
+      "id": "M057",
+      "numericId": 27,
+      "status": "mitigationIdentified",
+      "content": "Make the bot comment unambiguous and non-authoritative: include run id and SHA in the marker, keep lane markers distinct, and document that the check run, not the comment, is the verdict.",
+      "displayOrder": 27,
+      "metadata": []
+    },
+    {
+      "id": "M058",
+      "numericId": 28,
+      "status": "mitigationIdentified",
+      "content": "Scope the secret-derived USE_BEDROCK expression to the job (or a single step) instead of the workflow-level env block (ASH finding 1).",
+      "displayOrder": 28,
+      "metadata": []
+    },
+    {
+      "id": "M059",
+      "numericId": 29,
+      "status": "mitigationInProgress",
+      "content": "When reusing the pattern on non-public code, keep model calls on Bedrock with restricted invocation logging (or zero retention) and review the Anthropic API fallback's data terms.",
+      "displayOrder": 29,
+      "metadata": []
+    },
+    {
+      "id": "M060",
+      "numericId": 30,
+      "status": "mitigationInProgress",
+      "content": "Define the recovery path for outages and false blocks: bounded retries, documented re-run, and a code-owner override procedure that never weakens the required check.",
+      "displayOrder": 30,
+      "metadata": []
+    }
+  ],
+  "assumptionLinks": [],
+  "mitigationLinks": [
+    {
+      "linkedId": "T001",
+      "mitigationId": "M031"
+    },
+    {
+      "linkedId": "T001",
+      "mitigationId": "M032"
+    },
+    {
+      "linkedId": "T001",
+      "mitigationId": "M033"
+    },
+    {
+      "linkedId": "T001",
+      "mitigationId": "M034"
+    },
+    {
+      "linkedId": "T001",
+      "mitigationId": "M035"
+    },
+    {
+      "linkedId": "T001",
+      "mitigationId": "M051"
+    },
+    {
+      "linkedId": "T001",
+      "mitigationId": "M056"
+    },
+    {
+      "linkedId": "T002",
+      "mitigationId": "M034"
+    },
+    {
+      "linkedId": "T002",
+      "mitigationId": "M044"
+    },
+    {
+      "linkedId": "T002",
+      "mitigationId": "M056"
+    },
+    {
+      "linkedId": "T003",
+      "mitigationId": "M041"
+    },
+    {
+      "linkedId": "T003",
+      "mitigationId": "M046"
+    },
+    {
+      "linkedId": "T003",
+      "mitigationId": "M047"
+    },
+    {
+      "linkedId": "T003",
+      "mitigationId": "M048"
+    },
+    {
+      "linkedId": "T004",
+      "mitigationId": "M031"
+    },
+    {
+      "linkedId": "T004",
+      "mitigationId": "M041"
+    },
+    {
+      "linkedId": "T004",
+      "mitigationId": "M046"
+    },
+    {
+      "linkedId": "T005",
+      "mitigationId": "M046"
+    },
+    {
+      "linkedId": "T005",
+      "mitigationId": "M048"
+    },
+    {
+      "linkedId": "T006",
+      "mitigationId": "M032"
+    },
+    {
+      "linkedId": "T006",
+      "mitigationId": "M036"
+    },
+    {
+      "linkedId": "T006",
+      "mitigationId": "M037"
+    },
+    {
+      "linkedId": "T006",
+      "mitigationId": "M049"
+    },
+    {
+      "linkedId": "T006",
+      "mitigationId": "M050"
+    },
+    {
+      "linkedId": "T006",
+      "mitigationId": "M051"
+    },
+    {
+      "linkedId": "T006",
+      "mitigationId": "M052"
+    },
+    {
+      "linkedId": "T007",
+      "mitigationId": "M036"
+    },
+    {
+      "linkedId": "T007",
+      "mitigationId": "M039"
+    },
+    {
+      "linkedId": "T007",
+      "mitigationId": "M050"
+    },
+    {
+      "linkedId": "T007",
+      "mitigationId": "M054"
+    },
+    {
+      "linkedId": "T008",
+      "mitigationId": "M032"
+    },
+    {
+      "linkedId": "T008",
+      "mitigationId": "M046"
+    },
+    {
+      "linkedId": "T008",
+      "mitigationId": "M051"
+    },
+    {
+      "linkedId": "T009",
+      "mitigationId": "M045"
+    },
+    {
+      "linkedId": "T009",
+      "mitigationId": "M054"
+    },
+    {
+      "linkedId": "T010",
+      "mitigationId": "M049"
+    },
+    {
+      "linkedId": "T010",
+      "mitigationId": "M050"
+    },
+    {
+      "linkedId": "T011",
+      "mitigationId": "M049"
+    },
+    {
+      "linkedId": "T011",
+      "mitigationId": "M050"
+    },
+    {
+      "linkedId": "T012",
+      "mitigationId": "M042"
+    },
+    {
+      "linkedId": "T012",
+      "mitigationId": "M050"
+    },
+    {
+      "linkedId": "T012",
+      "mitigationId": "M053"
+    },
+    {
+      "linkedId": "T013",
+      "mitigationId": "M035"
+    },
+    {
+      "linkedId": "T013",
+      "mitigationId": "M056"
+    },
+    {
+      "linkedId": "T013",
+      "mitigationId": "M060"
+    },
+    {
+      "linkedId": "T014",
+      "mitigationId": "M034"
+    },
+    {
+      "linkedId": "T014",
+      "mitigationId": "M056"
+    },
+    {
+      "linkedId": "T014",
+      "mitigationId": "M060"
+    },
+    {
+      "linkedId": "T015",
+      "mitigationId": "M034"
+    },
+    {
+      "linkedId": "T015",
+      "mitigationId": "M042"
+    },
+    {
+      "linkedId": "T015",
+      "mitigationId": "M053"
+    },
+    {
+      "linkedId": "T016",
+      "mitigationId": "M033"
+    },
+    {
+      "linkedId": "T016",
+      "mitigationId": "M040"
+    },
+    {
+      "linkedId": "T017",
+      "mitigationId": "M035"
+    },
+    {
+      "linkedId": "T017",
+      "mitigationId": "M057"
+    },
+    {
+      "linkedId": "T018",
+      "mitigationId": "M055"
+    },
+    {
+      "linkedId": "T018",
+      "mitigationId": "M057"
+    },
+    {
+      "linkedId": "T019",
+      "mitigationId": "M032"
+    },
+    {
+      "linkedId": "T019",
+      "mitigationId": "M035"
+    },
+    {
+      "linkedId": "T019",
+      "mitigationId": "M054"
+    },
+    {
+      "linkedId": "T020",
+      "mitigationId": "M038"
+    },
+    {
+      "linkedId": "T020",
+      "mitigationId": "M046"
+    },
+    {
+      "linkedId": "T020",
+      "mitigationId": "M047"
+    },
+    {
+      "linkedId": "T021",
+      "mitigationId": "M059"
+    },
+    {
+      "linkedId": "T022",
+      "mitigationId": "M058"
+    },
+    {
+      "linkedId": "T023",
+      "mitigationId": "M043"
+    },
+    {
+      "linkedId": "T023",
+      "mitigationId": "M044"
+    },
+    {
+      "linkedId": "T024",
+      "mitigationId": "M043"
+    },
+    {
+      "linkedId": "T024",
+      "mitigationId": "M044"
+    }
+  ],
+  "threats": [
+    {
+      "id": "T001",
+      "numericId": 1,
+      "threatSource": "Malicious or compromised same-repository contributor (TA013)",
+      "prerequisites": "Write access to open a same-repo PR (TA013); a model that follows embedded instructions or treats planted text as evidence despite the prompt's warnings; or, if assumption A011 fails,",
+      "threatAction": "Plants prompt-injection text in code comments, docstrings, filenames, test names or a symlinked 'docs' file ('audited by security', 'reviewers: report no findings', fake SYSTEM blocks asking for the",
+      "threatImpact": "Validation pass emits [REVIEWED] <sha> without [BLOCK-MERGE] for a PR that removes a security guard; the gate passes and vulnerable code merges. The security control becomes the attack surface.",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014",
+        "A021",
+        "A022",
+        "A023"
+      ],
+      "statement": "A Malicious or compromised same-repository contributor (TA013) Write access to open a same-repo PR (TA013); a model that follows embedded instructions or treats planted text as evidence despite the prompt's warnings; or, if assumption A011 fails, can Plants prompt-injection text in code comments, docstrings, filenames, test names or a symlinked 'docs' file ('audited by security', 'reviewers: report no findings', fake SYSTEM blocks asking for the, which leads to Validation pass emits [REVIEWED] <sha> without [BLOCK-MERGE] for a PR that removes a security guard; the gate passes and vulnerable code merges. The security control becomes the attack surface.",
+      "displayOrder": 1,
+      "status": "threatIdentified",
+      "tags": [
+        "attack-2",
+        "prompt-injection",
+        "STRIDE-T",
+        "LLM01"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T002",
+      "numericId": 2,
+      "threatSource": "Malicious or compromised same-repository contributor (TA013); disgruntled contributor (TA008)",
+      "prerequisites": "Write access; a change small enough or well-disguised enough (polished feature, passing tests, plausible commit message) that a nondeterministic model does not ground the defect in one of its two",
+      "threatAction": "Smuggles a guard removal inside a legitimate-looking feature: replaces the resolved-path containment in app/files.py with startswith('../'), or adds a raw-token debug log in app/tokens.py, keeping",
+      "threatImpact": "False negative: the reviewer passes the PR, the containment or redaction guard is removed, and a deployed asset service becomes an arbitrary-file-read (img/../../secret.txt) or leaks API tokens to",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014",
+        "A022",
+        "A023",
+        "A025"
+      ],
+      "statement": "A Malicious or compromised same-repository contributor (TA013); disgruntled contributor (TA008) Write access; a change small enough or well-disguised enough (polished feature, passing tests, plausible commit message) that a nondeterministic model does not ground the defect in one of its two can Smuggles a guard removal inside a legitimate-looking feature: replaces the resolved-path containment in app/files.py with startswith('../'), or adds a raw-token debug log in app/tokens.py, keeping, which leads to False negative: the reviewer passes the PR, the containment or redaction guard is removed, and a deployed asset service becomes an arbitrary-file-read (img/../../secret.txt) or leaks API tokens to",
+      "displayOrder": 2,
+      "status": "threatIdentified",
+      "tags": [
+        "attack-1",
+        "false-negative",
+        "STRIDE-T"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T003",
+      "numericId": 3,
+      "threatSource": "Malicious or compromised same-repository contributor (TA013)",
+      "prerequisites": "Write access; no CODEOWNERS or required human review for .github/**; branch protection that only requires the check to pass, not that the workflow be unchanged.",
+      "threatAction": "Edits .github/workflows/agentic-review.yml in the same PR as the malicious code: replaces the gate with exit 0, widens --allowedTools to include Bash/WebFetch, removes the fork guard, points the",
+      "threatImpact": "Complete bypass of the review gate: the required check turns green on attacker terms; with Bash enabled the agent can also be made to exfiltrate AWS session credentials and GITHUB_TOKEN. The base-ref",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A016",
+        "A017",
+        "A018",
+        "A023"
+      ],
+      "statement": "A Malicious or compromised same-repository contributor (TA013) Write access; no CODEOWNERS or required human review for .github/**; branch protection that only requires the check to pass, not that the workflow be unchanged. can Edits .github/workflows/agentic-review.yml in the same PR as the malicious code: replaces the gate with exit 0, widens --allowedTools to include Bash/WebFetch, removes the fork guard, points the, which leads to Complete bypass of the review gate: the required check turns green on attacker terms; with Bash enabled the agent can also be made to exfiltrate AWS session credentials and GITHUB_TOKEN. The base-ref",
+      "displayOrder": 3,
+      "status": "threatIdentified",
+      "tags": [
+        "workflow-tampering",
+        "STRIDE-E",
+        "known-gap"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T004",
+      "numericId": 4,
+      "threatSource": "Malicious or compromised same-repository contributor (TA013)",
+      "prerequisites": "Write access. For the current PR the attack is neutralised by base-ref loading; it only succeeds if the weakened contract reaches main (via a false pass, T001/T002, or a maintainer merging without",
+      "threatAction": "Sets blocking: false on no-guard-removal, narrows file-patterns, rewrites validate.md to always emit a clean verdict, or removes a prompt file entirely (README attack 3).",
+      "threatImpact": "If merged, every subsequent PR is judged against a disarmed contract; a missing prompt on base makes the extraction step fail closed instead.",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A015",
+        "A022",
+        "A023"
+      ],
+      "statement": "A Malicious or compromised same-repository contributor (TA013) Write access. For the current PR the attack is neutralised by base-ref loading; it only succeeds if the weakened contract reaches main (via a false pass, T001/T002, or a maintainer merging without can Sets blocking: false on no-guard-removal, narrows file-patterns, rewrites validate.md to always emit a clean verdict, or removes a prompt file entirely (README attack 3)., which leads to If merged, every subsequent PR is judged against a disarmed contract; a missing prompt on base makes the extraction step fail closed instead.",
+      "displayOrder": 4,
+      "status": "threatResolved",
+      "tags": [
+        "attack-3",
+        "rules-may-only-tighten",
+        "STRIDE-T"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T005",
+      "numericId": 5,
+      "threatSource": "Privileged user / maintainer mistake (TA009)",
+      "prerequisites": "Repository admin leaves admin bypass enabled, does not list 'Agentic AI Review' as a required status check, or the required check name no longer matches the job name (e.g., after renaming the lane",
+      "threatAction": "Merges, or lets a contributor merge, a PR whose review check failed or never ran, because branch protection does not enforce the check.",
+      "threatImpact": "The gate is advisory only: every other control in this model becomes irrelevant to the merge decision. The README's demo point (naive lane goes green on an attack) inverts into the hardened lane",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A023"
+      ],
+      "statement": "A Privileged user / maintainer mistake (TA009) Repository admin leaves admin bypass enabled, does not list 'Agentic AI Review' as a required status check, or the required check name no longer matches the job name (e.g., after renaming the lane can Merges, or lets a contributor merge, a PR whose review check failed or never ran, because branch protection does not enforce the check., which leads to The gate is advisory only: every other control in this model becomes irrelevant to the merge decision. The README's demo point (naive lane goes green on an attack) inverts into the hardened lane",
+      "displayOrder": 5,
+      "status": "threatIdentified",
+      "tags": [
+        "branch-protection",
+        "misconfiguration",
+        "STRIDE-E"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T006",
+      "numericId": 6,
+      "threatSource": "Malicious or compromised same-repository contributor (TA013), monetised by automated secret harvesters (TA015) and organised crime (TA005)",
+      "prerequisites": "Write access; successful steering of either agent (T001); the Read tool can open any path on the runner, including /proc/self/environ, $HOME, $RUNNER_TEMP and PR-committed symlinks pointing there.",
+      "threatAction": "Instructs the agent, via in-diff text or a symlink such as docs/context.md -> /proc/self/environ, to read the environment or credential files and quote the values in its final message, optionally",
+      "threatImpact": "The CI comment step and the 'cat' to the run log publish the credentials on a public repository; STS session credentials remain valid up to 1 hour (A027) for Bedrock invocation, ANTHROPIC_API_KEY",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A017",
+        "A018",
+        "A019",
+        "A022",
+        "A024"
+      ],
+      "statement": "A Malicious or compromised same-repository contributor (TA013), monetised by automated secret harvesters (TA015) and organised crime (TA005) Write access; successful steering of either agent (T001); the Read tool can open any path on the runner, including /proc/self/environ, $HOME, $RUNNER_TEMP and PR-committed symlinks pointing there. can Instructs the agent, via in-diff text or a symlink such as docs/context.md -> /proc/self/environ, to read the environment or credential files and quote the values in its final message, optionally, which leads to The CI comment step and the 'cat' to the run log publish the credentials on a public repository; STS session credentials remain valid up to 1 hour (A027) for Bedrock invocation, ANTHROPIC_API_KEY",
+      "displayOrder": 6,
+      "status": "threatIdentified",
+      "tags": [
+        "credential-exfiltration",
+        "redaction-bypass",
+        "STRIDE-I",
+        "LLM02"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T007",
+      "numericId": 7,
+      "threatSource": "Software supply-chain attacker (TA014); third-party vendor change (TA010)",
+      "prerequisites": "A compromised release of the Claude Code CLI that claude-code-action downloads at run time (version not pinned by this repository), or a compromised commit reachable from the pinned action SHAs",
+      "threatAction": "Malicious code executes inside the agent steps, after configure-aws-credentials has exported STS credentials and with github_token/anthropic_api_key as inputs; it can exfiltrate them over the network",
+      "threatImpact": "Credential theft and silent verdict forgery for every PR reviewed while the compromised version is live; the comment in the workflow that credentials are assumed 'after every install step' does not",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A017",
+        "A018",
+        "A019",
+        "A022"
+      ],
+      "statement": "A Software supply-chain attacker (TA014); third-party vendor change (TA010) A compromised release of the Claude Code CLI that claude-code-action downloads at run time (version not pinned by this repository), or a compromised commit reachable from the pinned action SHAs can Malicious code executes inside the agent steps, after configure-aws-credentials has exported STS credentials and with github_token/anthropic_api_key as inputs; it can exfiltrate them over the network, which leads to Credential theft and silent verdict forgery for every PR reviewed while the compromised version is live; the comment in the workflow that credentials are assumed 'after every install step' does not",
+      "displayOrder": 7,
+      "status": "threatIdentified",
+      "tags": [
+        "supply-chain",
+        "STRIDE-E",
+        "run-time-install"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T008",
+      "numericId": 8,
+      "threatSource": "Malicious or compromised same-repository contributor (TA013)",
+      "prerequisites": "The agent gains an execution or network tool: --allowedTools widened by a workflow edit (T003), a claude-code-action update that changes tool defaults, or a maintainer relaxing the list to 'let it",
+      "threatAction": "PR content (and, in the naive lane, the PR body) asks the reviewer to 'run pytest to verify'; a conftest.py in the PR POSTs the process environment and the checkout to an attacker URL when imported",
+      "threatImpact": "Attacker code runs with the reviewer's AWS session credentials and GITHUB_TOKEN; canary fires. Currently blocked because Read/Grep/Glob cannot execute anything (README: 'tool denial visible in",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014",
+        "A017",
+        "A018"
+      ],
+      "statement": "A Malicious or compromised same-repository contributor (TA013) The agent gains an execution or network tool: --allowedTools widened by a workflow edit (T003), a claude-code-action update that changes tool defaults, or a maintainer relaxing the list to 'let it can PR content (and, in the naive lane, the PR body) asks the reviewer to 'run pytest to verify'; a conftest.py in the PR POSTs the process environment and the checkout to an attacker URL when imported, which leads to Attacker code runs with the reviewer's AWS session credentials and GITHUB_TOKEN; canary fires. Currently blocked because Read/Grep/Glob cannot execute anything (README: 'tool denial visible in",
+      "displayOrder": 8,
+      "status": "threatResolved",
+      "tags": [
+        "attack-4",
+        "code-execution",
+        "STRIDE-E"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T009",
+      "numericId": 9,
+      "threatSource": "Malicious contributor (TA013) or external fork author (TA002, TA007)",
+      "prerequisites": "Any PR (same-repo or fork) can add or modify tests; ci.yml runs them with a contents:read GITHUB_TOKEN and no repository secrets; outbound network from the runner is unrestricted.",
+      "threatAction": "conftest.py or a test exfiltrates the runner environment, the read-only token and the checkout to a remote endpoint during python -m pytest.",
+      "threatImpact": "Disclosure limited to public code and a short-lived read-only token (persist-credentials=false keeps it out of .git/config); becomes serious only if a maintainer later adds secrets (e.g.,",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014",
+        "A017"
+      ],
+      "statement": "A Malicious contributor (TA013) or external fork author (TA002, TA007) Any PR (same-repo or fork) can add or modify tests; ci.yml runs them with a contents:read GITHUB_TOKEN and no repository secrets; outbound network from the runner is unrestricted. can conftest.py or a test exfiltrates the runner environment, the read-only token and the checkout to a remote endpoint during python -m pytest., which leads to Disclosure limited to public code and a short-lived read-only token (persist-credentials=false keeps it out of .git/config); becomes serious only if a maintainer later adds secrets (e.g.,",
+      "displayOrder": 9,
+      "status": "threatResolved",
+      "tags": [
+        "attack-4",
+        "ci-test-job",
+        "STRIDE-I"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T010",
+      "numericId": 10,
+      "threatSource": "External attacker (TA002) exploiting a maintainer misconfiguration (TA009)",
+      "prerequisites": "IAM trust policy for AWS_BEDROCK_ROLE_ARN with a wildcard or organisation-wide token.actions.githubusercontent.com:sub condition, or missing aud condition (AWS IAM: 'GitHub Actions from organizations",
+      "threatAction": "Runs a workflow in an attacker-controlled GitHub repository that requests an OIDC token and calls sts:AssumeRoleWithWebIdentity for the Bedrock role.",
+      "threatImpact": "Attacker obtains Bedrock invocation credentials on the maintainer's account without touching this repository: cost abuse and model access under the maintainer's identity.",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A018",
+        "A020"
+      ],
+      "statement": "A External attacker (TA002) exploiting a maintainer misconfiguration (TA009) IAM trust policy for AWS_BEDROCK_ROLE_ARN with a wildcard or organisation-wide token.actions.githubusercontent.com:sub condition, or missing aud condition (AWS IAM: 'GitHub Actions from organizations can Runs a workflow in an attacker-controlled GitHub repository that requests an OIDC token and calls sts:AssumeRoleWithWebIdentity for the Bedrock role., which leads to Attacker obtains Bedrock invocation credentials on the maintainer's account without touching this repository: cost abuse and model access under the maintainer's identity.",
+      "displayOrder": 10,
+      "status": "threatIdentified",
+      "tags": [
+        "oidc",
+        "iam-trust-policy",
+        "STRIDE-S",
+        "aws-docs-validated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T011",
+      "numericId": 11,
+      "threatSource": "Any actor holding leaked session credentials (TA013, TA014, TA015) enabled by maintainer misconfiguration (TA009)",
+      "prerequisites": "Role permission policy broader than bedrock:InvokeModel/InvokeModelWithResponseStream on the specific inference-profile and foundation-model ARNs (AWS guidance:",
+      "threatAction": "Uses the leaked STS session to call whatever the over-broad policy allows: other Bedrock APIs (CreateModelCustomizationJob, agents, knowledge bases), other services, or arbitrary expensive models.",
+      "threatImpact": "Blast radius of a credential leak grows from bounded model-invocation cost to account-level impact.",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A018"
+      ],
+      "statement": "A Any actor holding leaked session credentials (TA013, TA014, TA015) enabled by maintainer misconfiguration (TA009) Role permission policy broader than bedrock:InvokeModel/InvokeModelWithResponseStream on the specific inference-profile and foundation-model ARNs (AWS guidance: can Uses the leaked STS session to call whatever the over-broad policy allows: other Bedrock APIs (CreateModelCustomizationJob, agents, knowledge bases), other services, or arbitrary expensive models., which leads to Blast radius of a credential leak grows from bounded model-invocation cost to account-level impact.",
+      "displayOrder": 11,
+      "status": "threatIdentified",
+      "tags": [
+        "least-privilege",
+        "STRIDE-E",
+        "aws-docs-validated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T012",
+      "numericId": 12,
+      "threatSource": "Malicious or disgruntled contributor (TA013, TA008); hacktivist (TA004)",
+      "prerequisites": "Write access (or many PRs from many accounts); no Bedrock budget alarm or invocation logging; concurrency only cancels superseded runs within one PR.",
+      "threatAction": "Opens many PRs or pushes many commits, each triggering two model calls of up to 40 turns (one on an Opus-class model) plus GitHub Actions minutes; large diffs maximise tokens per run.",
+      "threatImpact": "Denial-of-wallet: unbounded Bedrock/Anthropic and Actions spend on the maintainer's accounts; possible account throttling that blocks legitimate reviews.",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A018",
+        "A019"
+      ],
+      "statement": "A Malicious or disgruntled contributor (TA013, TA008); hacktivist (TA004) Write access (or many PRs from many accounts); no Bedrock budget alarm or invocation logging; concurrency only cancels superseded runs within one PR. can Opens many PRs or pushes many commits, each triggering two model calls of up to 40 turns (one on an Opus-class model) plus GitHub Actions minutes; large diffs maximise tokens per run., which leads to Denial-of-wallet: unbounded Bedrock/Anthropic and Actions spend on the maintainer's accounts; possible account throttling that blocks legitimate reviews.",
+      "displayOrder": 12,
+      "status": "threatResolved",
+      "tags": [
+        "denial-of-wallet",
+        "cost",
+        "STRIDE-D"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T013",
+      "numericId": 13,
+      "threatSource": "Third-party vendor change or outage (TA010)",
+      "prerequisites": "Bedrock or Anthropic outage, ThrottlingException, model id deprecation (defaults are hard-coded inference profile ids), claude-code-action output format change breaking the jq extraction, or a base",
+      "threatAction": "The validation step fails or returns no [REVIEWED] marker; the gate exits 1 as designed.",
+      "threatImpact": "All merges to main are blocked until the maintainer re-runs or fixes the workflow. Safe failure mode, but sustained outages create pressure to disable the required check (feeds T005).",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A023"
+      ],
+      "statement": "A Third-party vendor change or outage (TA010) Bedrock or Anthropic outage, ThrottlingException, model id deprecation (defaults are hard-coded inference profile ids), claude-code-action output format change breaking the jq extraction, or a base can The validation step fails or returns no [REVIEWED] marker; the gate exits 1 as designed., which leads to All merges to main are blocked until the maintainer re-runs or fixes the workflow. Safe failure mode, but sustained outages create pressure to disable the required check (feeds T005).",
+      "displayOrder": 13,
+      "status": "threatResolved",
+      "tags": [
+        "fail-closed",
+        "availability",
+        "STRIDE-D"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T014",
+      "numericId": 14,
+      "threatSource": "Model behaviour (TA010); opportunistically a contributor wanting to block a rival's PR (TA008)",
+      "prerequisites": "Model nondeterminism; a clean PR whose code resembles a violation; or planted text that the validation model mistakes for a grounded finding.",
+      "threatAction": "Validation pass emits [BLOCK-MERGE] <sha> for a PR with no real defect.",
+      "threatImpact": "Legitimate change blocked; repeated false blocks erode trust and push maintainers toward bypassing or weakening the gate.",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A022",
+        "A023"
+      ],
+      "statement": "A Model behaviour (TA010); opportunistically a contributor wanting to block a rival's PR (TA008) Model nondeterminism; a clean PR whose code resembles a violation; or planted text that the validation model mistakes for a grounded finding. can Validation pass emits [BLOCK-MERGE] <sha> for a PR with no real defect., which leads to Legitimate change blocked; repeated false blocks erode trust and push maintainers toward bypassing or weakening the gate.",
+      "displayOrder": 14,
+      "status": "threatResolved",
+      "tags": [
+        "false-positive",
+        "STRIDE-D"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T015",
+      "numericId": 15,
+      "threatSource": "Malicious or compromised same-repository contributor (TA013)",
+      "prerequisites": "Write access; no upper bound on diff size in the workflow (only a lower bound: non-empty); --max-turns 40 and model context limits.",
+      "threatAction": "Buries a three-line guard removal inside a very large diff (vendored files, generated code, mass reformatting) or obfuscates it (Unicode bidi overrides, homoglyph identifiers, deeply nested",
+      "threatImpact": "False pass through capacity exhaustion rather than persuasion; discovery may hit the 120000-byte cap and fail closed, but a targeted attacker tunes the volume to stay under it.",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014",
+        "A022",
+        "A023"
+      ],
+      "statement": "A Malicious or compromised same-repository contributor (TA013) Write access; no upper bound on diff size in the workflow (only a lower bound: non-empty); --max-turns 40 and model context limits. can Buries a three-line guard removal inside a very large diff (vendored files, generated code, mass reformatting) or obfuscates it (Unicode bidi overrides, homoglyph identifiers, deeply nested, which leads to False pass through capacity exhaustion rather than persuasion; discovery may hit the 120000-byte cap and fail closed, but a targeted attacker tunes the volume to stay under it.",
+      "displayOrder": 15,
+      "status": "threatIdentified",
+      "tags": [
+        "diff-shaping",
+        "needle-in-haystack",
+        "trojan-source",
+        "STRIDE-T"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T016",
+      "numericId": 16,
+      "threatSource": "Malicious or compromised same-repository contributor (TA013)",
+      "prerequisites": "Write access; a workflow that wrote scratch files into the checkout without first removing PR-committed entries at those paths, or that ran any PR code before the scratch files were created.",
+      "threatAction": "Commits .review-base or .review-prompts as symlinks (or files) so that the base-ref extraction writes elsewhere and the agent reads PR-controlled rules/prompts; or commits .review-candidates.md /",
+      "threatImpact": "Would defeat CONTROL 1 (base-ref contract) or pre-seed the gate's input; currently mitigated by rm -rf/rm -f before every write and by writing pr.diff under $RUNNER_TEMP outside the checkout.",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A015",
+        "A021",
+        "A022"
+      ],
+      "statement": "A Malicious or compromised same-repository contributor (TA013) Write access; a workflow that wrote scratch files into the checkout without first removing PR-committed entries at those paths, or that ran any PR code before the scratch files were created. can Commits .review-base or .review-prompts as symlinks (or files) so that the base-ref extraction writes elsewhere and the agent reads PR-controlled rules/prompts; or commits .review-candidates.md /, which leads to Would defeat CONTROL 1 (base-ref contract) or pre-seed the gate's input; currently mitigated by rm -rf/rm -f before every write and by writing pr.diff under $RUNNER_TEMP outside the checkout.",
+      "displayOrder": 16,
+      "status": "threatResolved",
+      "tags": [
+        "symlink",
+        "scratch-path",
+        "STRIDE-T"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T017",
+      "numericId": 17,
+      "threatSource": "Malicious contributor (TA013); external fork author (TA002)",
+      "prerequisites": "Any account that can comment on the PR; humans who read comments instead of the check status; or another workflow that also posts as github-actions[bot] with a body starting with the same marker.",
+      "threatAction": "Posts a look-alike 'Agentic AI Review — Verdict: pass' comment from their own account, or a second bot-authored comment with the marker so the updater PATCHes the wrong comment.",
+      "threatImpact": "A human merger is misled about the verdict; the comment history becomes ambiguous. The merge gate itself is unaffected because branch protection reads the check run, and the updater filters on",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A022"
+      ],
+      "statement": "A Malicious contributor (TA013); external fork author (TA002) Any account that can comment on the PR; humans who read comments instead of the check status; or another workflow that also posts as github-actions[bot] with a body starting with the same marker. can Posts a look-alike 'Agentic AI Review — Verdict: pass' comment from their own account, or a second bot-authored comment with the marker so the updater PATCHes the wrong comment., which leads to A human merger is misled about the verdict; the comment history becomes ambiguous. The merge gate itself is unaffected because branch protection reads the check run, and the updater filters on",
+      "displayOrder": 17,
+      "status": "threatResolved",
+      "tags": [
+        "comment-spoofing",
+        "STRIDE-S"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T018",
+      "numericId": 18,
+      "threatSource": "Malicious or disgruntled contributor (TA013, TA008)",
+      "prerequisites": "Repository write access lets a user edit or delete any issue/PR comment, including the bot's; run logs expire after the retention period; execution_file is not uploaded as an artifact.",
+      "threatAction": "Edits the posted review comment after the fact (e.g., removes the BLOCK verdict text) or waits out log retention so the model's reasoning for a pass/block cannot be reconstructed.",
+      "threatImpact": "Loss of an auditable record of what the reviewer actually said for a given SHA; disputes about why a change was allowed cannot be settled from the PR alone.",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A022",
+        "A024"
+      ],
+      "statement": "A Malicious or disgruntled contributor (TA013, TA008) Repository write access lets a user edit or delete any issue/PR comment, including the bot's; run logs expire after the retention period; execution_file is not uploaded as an artifact. can Edits the posted review comment after the fact (e.g., removes the BLOCK verdict text) or waits out log retention so the model's reasoning for a pass/block cannot be reconstructed., which leads to Loss of an auditable record of what the reviewer actually said for a given SHA; disputes about why a change was allowed cannot be settled from the PR alone.",
+      "displayOrder": 18,
+      "status": "threatResolved",
+      "tags": [
+        "audit-trail",
+        "STRIDE-R"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T019",
+      "numericId": 19,
+      "threatSource": "Prompt-injected agent acting as confused deputy for TA013",
+      "prerequisites": "Assumption A011 fails: claude-code-action exposes GitHub write tools (comment, review, file ops) to the model despite --allowedTools, or a future version changes defaults; repository setting 'Allow",
+      "threatAction": "The agent uses github_token to post its own 'pass' comment with the marker, approve the PR as github-actions[bot], or edit files.",
+      "threatImpact": "Model output acquires authority it was designed not to have; a bot approval could satisfy a review-count rule.",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A017",
+        "A022"
+      ],
+      "statement": "A Prompt-injected agent acting as confused deputy for TA013 Assumption A011 fails: claude-code-action exposes GitHub write tools (comment, review, file ops) to the model despite --allowedTools, or a future version changes defaults; repository setting 'Allow can The agent uses github_token to post its own 'pass' comment with the marker, approve the PR as github-actions[bot], or edit files., which leads to Model output acquires authority it was designed not to have; a bot approval could satisfy a review-count rule.",
+      "displayOrder": 19,
+      "status": "threatIdentified",
+      "tags": [
+        "confused-deputy",
+        "github-token",
+        "STRIDE-S"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T020",
+      "numericId": 20,
+      "threatSource": "External fork author (TA002, TA007) enabled by maintainer mistake (TA009)",
+      "prerequisites": "A maintainer adds the fork lane the README recommends but implements it with pull_request_target (or workflow_run) and checks out the fork head, or passes fork content to an agent with secrets",
+      "threatAction": "Opens a fork PR whose content is executed or reviewed in a privileged default-branch context with repository secrets and a write-capable token ('pwn request').",
+      "threatImpact": "Anonymous internet users gain everything TA013 has: credential exfiltration, gate bypass, comment forgery. Not present today because every step is skipped for forks and secrets are withheld.",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A016",
+        "A017",
+        "A018",
+        "A019"
+      ],
+      "statement": "A External fork author (TA002, TA007) enabled by maintainer mistake (TA009) A maintainer adds the fork lane the README recommends but implements it with pull_request_target (or workflow_run) and checks out the fork head, or passes fork content to an agent with secrets can Opens a fork PR whose content is executed or reviewed in a privileged default-branch context with repository secrets and a write-capable token ('pwn request')., which leads to Anonymous internet users gain everything TA013 has: credential exfiltration, gate bypass, comment forgery. Not present today because every step is skipped for forks and secrets are withheld.",
+      "displayOrder": 20,
+      "status": "threatResolved",
+      "tags": [
+        "pull_request_target",
+        "fork",
+        "future-change",
+        "STRIDE-E"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T021",
+      "numericId": 21,
+      "threatSource": "Third-party model provider (TA010); anyone with access to invocation logs",
+      "prerequisites": "The pattern is copied to a private or proprietary repository; the Anthropic API fallback is used (different retention terms than Bedrock); or Bedrock model invocation logging is enabled without",
+      "threatAction": "Source code, the diff and any file the agent reads leave the repository boundary inside prompts.",
+      "threatImpact": "For this public repository: none. For reuse on private code: disclosure of source to the provider or to over-broad log readers. Bedrock does not store prompts or share them with model providers",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014"
+      ],
+      "statement": "A Third-party model provider (TA010); anyone with access to invocation logs The pattern is copied to a private or proprietary repository; the Anthropic API fallback is used (different retention terms than Bedrock); or Bedrock model invocation logging is enabled without can Source code, the diff and any file the agent reads leave the repository boundary inside prompts., which leads to For this public repository: none. For reuse on private code: disclosure of source to the provider or to over-broad log readers. Bedrock does not store prompts or share them with model providers",
+      "displayOrder": 21,
+      "status": "threatResolvedNotUseful",
+      "tags": [
+        "data-handling",
+        "reuse",
+        "STRIDE-I",
+        "aws-docs-validated"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T022",
+      "numericId": 22,
+      "threatSource": "Public reader of run logs (TA002, TA015)",
+      "prerequisites": "Workflow-level env: USE_BEDROCK: ${{ secrets.AWS_BEDROCK_ROLE_ARN != '' }} (ASH/semgrep finding gha-workflow-env-secret).",
+      "threatAction": "Reads whether Bedrock auth is configured from the environment variable / step outcomes.",
+      "threatImpact": "Discloses only a boolean (which auth path is used), never the ARN; the credentials step being run or skipped already reveals the same. Hygiene finding: scope the expression to the job or a single",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A019"
+      ],
+      "statement": "A Public reader of run logs (TA002, TA015) Workflow-level env: USE_BEDROCK: ${{ secrets.AWS_BEDROCK_ROLE_ARN != '' }} (ASH/semgrep finding gha-workflow-env-secret). can Reads whether Bedrock auth is configured from the environment variable / step outcomes., which leads to Discloses only a boolean (which auth path is used), never the ARN; the credentials step being run or skipped already reveals the same. Hygiene finding: scope the expression to the job or a single",
+      "displayOrder": 22,
+      "status": "threatIdentified",
+      "tags": [
+        "ash-finding-1",
+        "hygiene",
+        "STRIDE-I"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T023",
+      "numericId": 23,
+      "threatSource": "Asset service client (persona) / external attacker (TA002)",
+      "prerequisites": "A deployment of the demo app; a merged change that replaces the resolved-path containment with a lexical check or removes it (the outcome T002/T001/T003 aim for).",
+      "threatAction": "Requests img/../../secret.txt or a path through a symlink inside the asset tree that points outside it.",
+      "threatImpact": "Arbitrary file read from the asset host; the vulnerability the whole gate exists to keep out of main. Currently prevented by resolve_asset's Path.resolve() containment (root == candidate or root in",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A025"
+      ],
+      "statement": "A Asset service client (persona) / external attacker (TA002) A deployment of the demo app; a merged change that replaces the resolved-path containment with a lexical check or removes it (the outcome T002/T001/T003 aim for). can Requests img/../../secret.txt or a path through a symlink inside the asset tree that points outside it., which leads to Arbitrary file read from the asset host; the vulnerability the whole gate exists to keep out of main. Currently prevented by resolve_asset's Path.resolve() containment (root == candidate or root in",
+      "displayOrder": 23,
+      "status": "threatResolved",
+      "tags": [
+        "path-traversal",
+        "protected-target",
+        "STRIDE-I"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "T024",
+      "numericId": 24,
+      "threatSource": "Asset service client (persona) / anyone with log access",
+      "prerequisites": "A deployment of the demo app; a merged change that logs the raw presented token, bypasses describe_token, or replaces hmac.compare_digest with == (timing side channel).",
+      "threatAction": "Harvests full API tokens from warning logs or recovers them byte-by-byte via response timing.",
+      "threatImpact": "Credential exposure for the demo service. Currently prevented by describe_token (4-char prefix + length) and constant-time comparison; the semgrep logger-credential-disclosure hit on tokens.py:29 is",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A025"
+      ],
+      "statement": "A Asset service client (persona) / anyone with log access A deployment of the demo app; a merged change that logs the raw presented token, bypasses describe_token, or replaces hmac.compare_digest with == (timing side channel). can Harvests full API tokens from warning logs or recovers them byte-by-byte via response timing., which leads to Credential exposure for the demo service. Currently prevented by describe_token (4-char prefix + length) and constant-time comparison; the semgrep logger-credential-disclosure hit on tokens.py:29 is",
+      "displayOrder": 24,
+      "status": "threatResolved",
+      "tags": [
+        "secret-logging",
+        "timing",
+        "protected-target",
+        "STRIDE-I"
+      ],
+      "metadata": []
+    }
+  ],
+  "businessContext": {
+    "description": "Public, Apache-2.0 sample repository (sample-agentic-code-review-gate) built for a security-conference demo. It shows an AI code reviewer designed as a fail-closed security control: a GitHub Actions workflow (.github/workflows/agentic-review.yml) runs two independent Claude model calls (discovery, then falsification/validation) against every same-repo pull request, using Amazon Bedrock via GitHub OIDC (secret AWS_BEDROCK_ROLE_ARN) or the Anthropic API (secret ANTHROPIC_API_KEY). Rules (RULES.yaml) and prompts (.github/review-prompts/*.md) are read from the PR BASE commit; the agent is code-only (Read/Grep/Glob) with a prefetched diff; a CI step parses SHA-scoped markers ([REVIEWED]/[BLOCK-MERGE]) and posts one PR comment; every abnormal path fails closed. The review target is a tiny Python asset service (app/files.py path containment, app/tokens.py constant-time token check with redacted logging) that is deliberately attacked by four demo PRs (guard removal, prompt injection, rules disarming, CI credential exfiltration). The README also describes a deliberately insecure naive lane and demo tooling that are not present in this checkout. Business value: reputational (a security sample must not itself be exploitable) and educational; the assets that matter are the integrity of the merge gate, the cloud/API credentials the workflow holds, and the cost of model invocations.",
+    "features": {
+      "industry_sector": "Technology",
+      "sensitivity_tier": "Confidential",
+      "user_base_size": "Nano",
+      "geographic_scope": "Global / Transboundary",
+      "regulatory_requirements": [
+        "None"
+      ],
+      "system_criticality": "Low",
+      "financial_impact": "Low",
+      "authentication_requirement": "Federated",
+      "deployment_model": "SaaS",
+      "user_base_metric": "Registered users",
+      "revenue_band": "Enterprise",
+      "geographic_profile": {
+        "data_residency": "National / Single-Country",
+        "compute_location": "National / Single-Country",
+        "user_base_location": "Global / Transboundary",
+        "organizational_headquarters": "National / Single-Country"
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "C001",
+      "name": "Pull request author client (git / GitHub web)",
+      "type": "Other",
+      "service_provider": "Other",
+      "specific_service": "git over HTTPS, GitHub web UI, gh CLI",
+      "version": null,
+      "description": "Entry point for all attacker-controlled input: branch pushes, PR open/synchronize/reopen events, PR title and body, and file content (code, comments, filenames, symlinks, conftest.py). Same-repo authors have write access; fork authors do not.",
+      "configuration": {
+        "trust": "untrusted content, authenticated identity",
+        "input_channels": [
+          "diff content",
+          "file names/symlinks",
+          "PR title/body (never reaches the agent)",
+          "commit messages"
+        ]
+      }
+    },
+    {
+      "id": "C002",
+      "name": "GitHub repository and pull request platform",
+      "type": "Other",
+      "service_provider": "Other",
+      "specific_service": "GitHub.com (repo, PRs, checks, branch protection)",
+      "version": null,
+      "description": "Hosts main and PR branches, the review contract on main, PR conversations where the verdict comment is posted, check runs, and the branch protection rules that make the check a merge gate (README setup step 4).",
+      "configuration": {
+        "branch_protection_required_checks": [
+          "Agentic AI Review",
+          "Unit tests"
+        ],
+        "admin_bypass": "must be disabled (assumption A005)",
+        "codeowners": "not shipped in this repository"
+      }
+    },
+    {
+      "id": "C003",
+      "name": "GitHub Actions control plane (event dispatch, secrets injection, OIDC issuer)",
+      "type": "Security",
+      "service_provider": "Other",
+      "specific_service": "GitHub Actions",
+      "version": null,
+      "description": "Dispatches pull_request events to agentic-review.yml and ci.yml, injects repository secrets/variables and the job-scoped GITHUB_TOKEN, mints the OIDC ID token (id-token: write), records the check conclusion from the job exit code, and applies the concurrency group agentic-review-<pr>.",
+      "configuration": {
+        "permissions": {
+          "contents": "read",
+          "pull-requests": "write",
+          "id-token": "write"
+        },
+        "trigger": "pull_request: opened, synchronize, reopened",
+        "secrets_to_fork_prs": "not passed (GitHub platform behaviour)",
+        "concurrency": "agentic-review-${{ github.event.pull_request.number }}, cancel-in-progress"
+      }
+    },
+    {
+      "id": "C004",
+      "name": "GitHub-hosted runner (ubuntu-latest) executing job agentic-review",
+      "type": "Compute",
+      "service_provider": "Other",
+      "specific_service": "GitHub-hosted runner VM",
+      "version": null,
+      "description": "Ephemeral VM that runs every step of the review job. Holds GITHUB_TOKEN, and after the credentials step the AWS session credentials, in process environment. All steps carry the fork guard head.repo.full_name == github.repository.",
+      "configuration": {
+        "runs_on": "ubuntu-latest",
+        "timeout_minutes": 30,
+        "job_name_on_fork": "Agentic AI Review (not run on forks)"
+      }
+    },
+    {
+      "id": "C005",
+      "name": "Contract and diff preparation steps (actions/checkout, extract base-ref rules and prompts, prefetch diff)",
+      "type": "Compute",
+      "service_provider": "Other",
+      "specific_service": "actions/checkout@3d3c42e5 (v7.0.1) + bash",
+      "version": null,
+      "description": "CONTROL 1 and CONTROL 2 part 1: checkout with persist-credentials=false and fetch-depth 0; rm -rf then recreate .review-base/.review-prompts; git show $BASE_SHA:RULES.yaml and both prompts (exit 1 if missing/empty); git diff base...head into $RUNNER_TEMP/pr.diff (exit 1 if empty).",
+      "configuration": {
+        "persist_credentials": false,
+        "fetch_depth": 0,
+        "fail_closed_on": [
+          "missing/empty prompt on base",
+          "empty diff"
+        ],
+        "symlink_defence": "rm -rf before mkdir of scratch dirs"
+      }
+    },
+    {
+      "id": "C006",
+      "name": "aws-actions/configure-aws-credentials (OIDC to STS)",
+      "type": "Security",
+      "service_provider": "AWS",
+      "specific_service": "aws-actions/configure-aws-credentials@cbe3b392 (v6.2.4)",
+      "version": null,
+      "description": "CONTROL 3: runs only when USE_BEDROCK == 'true'; exchanges the GitHub OIDC token for short-lived STS credentials for secrets.AWS_BEDROCK_ROLE_ARN in vars.AWS_REGION (default us-west-2) and exports them into the job environment for the remaining steps.",
+      "configuration": {
+        "role_to_assume": "secrets.AWS_BEDROCK_ROLE_ARN",
+        "aws_region": "vars.AWS_REGION || us-west-2",
+        "condition": "env.USE_BEDROCK == 'true'",
+        "ordering": "after every install/prep step, before the model calls"
+      }
+    },
+    {
+      "id": "C007",
+      "name": "Discovery agent (anthropics/claude-code-action pass 1)",
+      "type": "Compute",
+      "service_provider": "Other",
+      "specific_service": "anthropics/claude-code-action@9c5ddab2 (v1.0.217), Claude Code CLI",
+      "version": null,
+      "description": "CONTROL 2 part 2 / CONTROL 4 stage 1: reads .review-prompts/discovery.md, the prefetched diff and any repository file via Read/Grep/Glob, and emits a candidate list ending in [DISCOVERY] <head sha>. Receives github_token and anthropic_api_key inputs and inherits AWS session credentials from the environment. Installs the Claude Code CLI at run time.",
+      "configuration": {
+        "model": "vars.DISCOVERY_MODEL || us.anthropic.claude-sonnet-4-6",
+        "allowed_tools": [
+          "Read",
+          "Grep",
+          "Glob"
+        ],
+        "max_turns": 40,
+        "use_bedrock": "env.USE_BEDROCK",
+        "inputs_with_secrets": [
+          "github_token",
+          "anthropic_api_key"
+        ]
+      }
+    },
+    {
+      "id": "C008",
+      "name": "Validation agent (anthropics/claude-code-action pass 2)",
+      "type": "Compute",
+      "service_provider": "Other",
+      "specific_service": "anthropics/claude-code-action@9c5ddab2 (v1.0.217), Claude Code CLI",
+      "version": null,
+      "description": "CONTROL 4 stage 2: independent invocation that reads .review-prompts/validate.md, the diff, the repository and .review-candidates.md (treated as untrusted evidence), falsifies candidates, classifies survivors against the closed BLOCKING list, and emits [REVIEWED] <sha> plus optionally [BLOCK-MERGE] <sha>. Only this pass's output reaches the PR.",
+      "configuration": {
+        "model": "vars.VALIDATION_MODEL || us.anthropic.claude-opus-4-8",
+        "allowed_tools": [
+          "Read",
+          "Grep",
+          "Glob"
+        ],
+        "max_turns": 40,
+        "use_bedrock": "env.USE_BEDROCK",
+        "inputs_with_secrets": [
+          "github_token",
+          "anthropic_api_key"
+        ]
+      }
+    },
+    {
+      "id": "C009",
+      "name": "Capture, redact, comment and gate steps (CI shell)",
+      "type": "Security",
+      "service_provider": "Other",
+      "specific_service": "bash + jq + perl + gh CLI",
+      "version": null,
+      "description": "CONTROL 5: extracts the last result from each pass's execution_file with jq; perl-redacts AKIA/ASIA key ids, arn:aws*, 12-digit account ids and labelled secret values; fails closed if [DISCOVERY] marker is missing or candidates exceed 120000 bytes; posts or updates ONE PR comment keyed by <!-- agentic-ai-review --> (filtered to github-actions[bot] author) using GITHUB_TOKEN; final gate exits 1 unless validate.outcome == success, review-output.md non-empty, [REVIEWED] <sha> present and [BLOCK-MERGE] <sha> absent.",
+      "configuration": {
+        "max_candidate_bytes": 120000,
+        "comment_marker": "<!-- agentic-ai-review -->",
+        "comment_author_filter": "github-actions[bot]",
+        "gate_markers": [
+          "[REVIEWED] <head sha>",
+          "[BLOCK-MERGE] <head sha>"
+        ],
+        "always_runs": [
+          "capture",
+          "comment",
+          "gate"
+        ]
+      }
+    },
+    {
+      "id": "C010",
+      "name": "AWS IAM role for Bedrock (AWS_BEDROCK_ROLE_ARN) and AWS STS",
+      "type": "Security",
+      "service_provider": "AWS",
+      "specific_service": "AWS IAM / AWS STS AssumeRoleWithWebIdentity",
+      "version": null,
+      "description": "IAM role trusted by GitHub's OIDC provider (token.actions.githubusercontent.com) for this repository; policy should grant only bedrock:InvokeModel* on the inference profiles used (README setup step 2). Configuration lives outside the repository.",
+      "configuration": {
+        "trust_policy_subject": "repo:<owner>/<repo>:pull_request (assumption A006)",
+        "permissions": "bedrock:InvokeModel* on used inference profiles (assumption A006)",
+        "session_duration": "default 1 hour"
+      }
+    },
+    {
+      "id": "C011",
+      "name": "Amazon Bedrock (Anthropic Claude inference profiles)",
+      "type": "Analytics",
+      "service_provider": "AWS",
+      "specific_service": "Amazon Bedrock Runtime (InvokeModel / Converse)",
+      "version": null,
+      "description": "Model provider on the recommended path. Receives prompts, the diff and any file content the agent reads; returns model output. Cross-region inference profile ids us.anthropic.claude-sonnet-4-6 and us.anthropic.claude-opus-4-8 by default.",
+      "configuration": {
+        "region": "vars.AWS_REGION || us-west-2",
+        "models": [
+          "us.anthropic.claude-sonnet-4-6",
+          "us.anthropic.claude-opus-4-8"
+        ],
+        "auth": "SigV4 with STS session credentials"
+      }
+    },
+    {
+      "id": "C012",
+      "name": "Anthropic API (fallback model provider)",
+      "type": "Other",
+      "service_provider": "Other",
+      "specific_service": "api.anthropic.com",
+      "version": null,
+      "description": "Used when AWS_BEDROCK_ROLE_ARN is not set and ANTHROPIC_API_KEY is. Long-lived API key passed as an action input to both agent steps; model ids must be overridden via repository variables.",
+      "configuration": {
+        "auth": "ANTHROPIC_API_KEY (long-lived secret)",
+        "condition": "USE_BEDROCK == 'false'"
+      }
+    },
+    {
+      "id": "C013",
+      "name": "Public package registries and release endpoints (PyPI, npm/Bun, GitHub Releases)",
+      "type": "Other",
+      "service_provider": "Other",
+      "specific_service": "pypi.org, registry.npmjs.org, github.com releases",
+      "version": null,
+      "description": "Run-time downloads: ci.yml installs pytest==8.4.1 and PyYAML==6.0.2 from PyPI; claude-code-action installs the Claude Code CLI; setup-python fetches interpreters. Third-party actions themselves are fetched from GitHub by pinned commit SHA.",
+      "configuration": {
+        "ci_pins": [
+          "pytest==8.4.1",
+          "PyYAML==6.0.2"
+        ],
+        "action_pins": "full commit SHAs with version comments",
+        "claude_code_cli_version": "controlled by the action, not pinned in this repo"
+      }
+    },
+    {
+      "id": "C014",
+      "name": "CI unit test job (ci.yml, pytest on ubuntu-latest)",
+      "type": "Compute",
+      "service_provider": "Other",
+      "specific_service": "GitHub Actions job 'Unit tests'",
+      "version": null,
+      "description": "Separate workflow on pull_request and push to main: checkout (persist-credentials=false), setup-python 3.12, pip install pytest/PyYAML, python -m pytest -q. Executes PR-controlled code (tests, conftest.py) with contents:read only and no repository secrets; runs for fork PRs too. Attack 4 in the README targets this job.",
+      "configuration": {
+        "permissions": {
+          "contents": "read"
+        },
+        "secrets_available": "GITHUB_TOKEN (read-only) only",
+        "runs_pr_code": true
+      }
+    },
+    {
+      "id": "C015",
+      "name": "Demo asset service library (app/files.py, app/tokens.py)",
+      "type": "Compute",
+      "service_provider": "Other",
+      "specific_service": "Python 3.12 library (no HTTP layer)",
+      "version": null,
+      "description": "The review target. resolve_asset() rejects empty/padded/absolute paths and any path whose resolve() (symlinks followed) is not under the resolved asset root, then read_asset() returns bytes. verify_token() compares with hmac.compare_digest and logs only describe_token() (4-char prefix + length) on failure. These are the guards RULES.yaml no-guard-removal and no-secret-logging protect.",
+      "configuration": {
+        "controls": [
+          "resolved-path containment",
+          "constant-time token compare",
+          "redacted token logging"
+        ],
+        "deployed": false
+      }
+    }
+  ],
+  "connections": [
+    {
+      "id": "CN001",
+      "source_id": "C001",
+      "destination_id": "D001",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "git push of PR branch; PR open/synchronize/reopen; PR title/body edits. Authenticated GitHub identity, attacker-controlled content."
+    },
+    {
+      "id": "CN002",
+      "source_id": "C002",
+      "destination_id": "C003",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "pull_request event (opened/synchronize/reopened) dispatched to agentic-review.yml and ci.yml; event payload includes head/base SHAs, head.repo.full_name, PR number."
+    },
+    {
+      "id": "CN003",
+      "source_id": "C003",
+      "destination_id": "C004",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "Job assignment to a fresh runner: workflow definition from the PR merge/head ref, GITHUB_TOKEN with declared permissions, repository secrets and variables (same-repo PRs only)."
+    },
+    {
+      "id": "CN004",
+      "source_id": "D002",
+      "destination_id": "C004",
+      "protocol": "Other",
+      "port": null,
+      "encryption": true,
+      "description": "Secrets/variables injected into the job: AWS_BEDROCK_ROLE_ARN (used in env presence test and role-to-assume), ANTHROPIC_API_KEY, DISCOVERY_MODEL, VALIDATION_MODEL, AWS_REGION."
+    },
+    {
+      "id": "CN005",
+      "source_id": "C005",
+      "destination_id": "D001",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "actions/checkout clones the PR head with fetch-depth 0 using GITHUB_TOKEN; persist-credentials=false so the token is not written to .git/config."
+    },
+    {
+      "id": "CN006",
+      "source_id": "C005",
+      "destination_id": "D003",
+      "protocol": "Other",
+      "port": null,
+      "encryption": false,
+      "description": "Writes .review-base/RULES.yaml and .review-prompts/{discovery,validate}.md from git show $BASE_SHA:..., and $RUNNER_TEMP/pr.diff from git diff base...head. Scratch dirs are rm -rf'ed first so PR-committed files/symlinks at those paths cannot redirect writes."
+    },
+    {
+      "id": "CN007",
+      "source_id": "C006",
+      "destination_id": "C003",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "Requests the GitHub OIDC ID token (ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN) for audience sts.amazonaws.com."
+    },
+    {
+      "id": "CN008",
+      "source_id": "C006",
+      "destination_id": "C010",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "sts:AssumeRoleWithWebIdentity with the OIDC token for secrets.AWS_BEDROCK_ROLE_ARN; returns short-lived credentials exported to the job environment."
+    },
+    {
+      "id": "CN009",
+      "source_id": "C007",
+      "destination_id": "D003",
+      "protocol": "Other",
+      "port": null,
+      "encryption": false,
+      "description": "Read/Grep/Glob over the checkout, .review-prompts/discovery.md, .review-base/RULES.yaml and $RUNNER_TEMP/pr.diff. Tool access is to the whole runner filesystem, not just the repo. Execution transcript written to execution_file."
+    },
+    {
+      "id": "CN010",
+      "source_id": "C007",
+      "destination_id": "C011",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "Bedrock Runtime InvokeModel/Converse (SigV4 with STS session credentials) carrying prompts, diff and read file content; returns discovery candidates."
+    },
+    {
+      "id": "CN011",
+      "source_id": "C007",
+      "destination_id": "C012",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "Fallback: Anthropic Messages API with ANTHROPIC_API_KEY when Bedrock is not configured."
+    },
+    {
+      "id": "CN012",
+      "source_id": "C007",
+      "destination_id": "C013",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "claude-code-action installs the Claude Code CLI at run time (version chosen by the action) while AWS session credentials are already present in the environment."
+    },
+    {
+      "id": "CN013",
+      "source_id": "C009",
+      "destination_id": "D003",
+      "protocol": "Other",
+      "port": null,
+      "encryption": false,
+      "description": "Reads discovery execution_file with jq, writes and perl-redacts .review-candidates.md; reads validation execution_file, writes and redacts review-output.md; writes /tmp/review-comment.md."
+    },
+    {
+      "id": "CN014",
+      "source_id": "C008",
+      "destination_id": "D003",
+      "protocol": "Other",
+      "port": null,
+      "encryption": false,
+      "description": "Read/Grep/Glob over the checkout, .review-prompts/validate.md, .review-base/RULES.yaml, $RUNNER_TEMP/pr.diff and .review-candidates.md (untrusted evidence)."
+    },
+    {
+      "id": "CN015",
+      "source_id": "C008",
+      "destination_id": "C011",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "Bedrock Runtime InvokeModel/Converse for the validation model; returns the review with [REVIEWED]/[BLOCK-MERGE] markers."
+    },
+    {
+      "id": "CN016",
+      "source_id": "C008",
+      "destination_id": "C012",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "Fallback: Anthropic Messages API for the validation pass."
+    },
+    {
+      "id": "CN017",
+      "source_id": "C008",
+      "destination_id": "C013",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "Second run-time install of the Claude Code CLI by the action (or cached from pass 1)."
+    },
+    {
+      "id": "CN018",
+      "source_id": "C009",
+      "destination_id": "D004",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "gh api repos/$REPO/issues/$PR/comments --paginate (find existing bot comment starting with marker), gh api PATCH issues/comments/<id>, or gh pr comment --body-file; authenticated with GITHUB_TOKEN (pull-requests: write)."
+    },
+    {
+      "id": "CN019",
+      "source_id": "C009",
+      "destination_id": "C003",
+      "protocol": "Other",
+      "port": null,
+      "encryption": true,
+      "description": "Gate step exit code (0 pass / 1 fail) becomes the job conclusion; ::error:: annotations; step logs streamed to the run log."
+    },
+    {
+      "id": "CN020",
+      "source_id": "C003",
+      "destination_id": "D004",
+      "protocol": "Other",
+      "port": null,
+      "encryption": true,
+      "description": "Check run 'Agentic AI Review' conclusion recorded on the PR head SHA; branch protection reads it to allow or block merge."
+    },
+    {
+      "id": "CN021",
+      "source_id": "C003",
+      "destination_id": "D005",
+      "protocol": "Other",
+      "port": null,
+      "encryption": true,
+      "description": "Run logs (including cat of redacted candidates and review output) and transcript output persisted for the repository's log retention period."
+    },
+    {
+      "id": "CN022",
+      "source_id": "C014",
+      "destination_id": "D001",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "ci.yml checkout of the PR head (persist-credentials=false) for both same-repo and fork PRs."
+    },
+    {
+      "id": "CN023",
+      "source_id": "C014",
+      "destination_id": "C013",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "setup-python interpreter download and pip install pytest==8.4.1 PyYAML==6.0.2 from PyPI."
+    },
+    {
+      "id": "CN024",
+      "source_id": "C014",
+      "destination_id": "C015",
+      "protocol": "Other",
+      "port": null,
+      "encryption": false,
+      "description": "python -m pytest -q imports and executes PR-controlled test code (including any conftest.py) against app/; runs with contents:read GITHUB_TOKEN and no repository secrets."
+    },
+    {
+      "id": "CN025",
+      "source_id": "C015",
+      "destination_id": "D006",
+      "protocol": "Other",
+      "port": null,
+      "encryption": false,
+      "description": "resolve_asset()/read_asset() open files under asset_root after the resolved-path containment check; the demo bypass target is a file outside the root."
+    },
+    {
+      "id": "CN026",
+      "source_id": "C007",
+      "destination_id": "C002",
+      "protocol": "HTTPS",
+      "port": 443,
+      "encryption": true,
+      "description": "claude-code-action receives github_token as an input; whether it calls the GitHub API in this prompt-driven mode (e.g., to fetch PR context) is not verifiable from this repository and is treated as a possible channel for PR title/body to reach the agent."
+    }
+  ],
+  "dataStores": [
+    {
+      "id": "D001",
+      "name": "Git repository content (main and PR branches)",
+      "type": "Other",
+      "classification": "Public",
+      "encryption_at_rest": true,
+      "backup_frequency": "Continuous",
+      "description": "Source of both the trusted review contract (RULES.yaml, .github/review-prompts/*.md, .github/workflows/*.yml on the BASE commit) and the untrusted PR head content. Public repository. Protected only by branch protection on main; no CODEOWNERS shipped."
+    },
+    {
+      "id": "D002",
+      "name": "GitHub Actions secrets and variables store",
+      "type": "Other",
+      "classification": "Restricted",
+      "encryption_at_rest": true,
+      "backup_frequency": "None",
+      "description": "Secrets AWS_BEDROCK_ROLE_ARN, ANTHROPIC_API_KEY (optional), DEMO_FAKE_SECRET (attack 4 demo); variables DISCOVERY_MODEL, VALIDATION_MODEL, AWS_REGION. Injected into same-repo pull_request runs only."
+    },
+    {
+      "id": "D003",
+      "name": "Runner ephemeral workspace and process environment",
+      "type": "File System",
+      "classification": "Confidential",
+      "encryption_at_rest": false,
+      "backup_frequency": "None",
+      "description": "Checkout of the PR head, .review-base/RULES.yaml, .review-prompts/*.md, $RUNNER_TEMP/pr.diff, .review-candidates.md, review-output.md, /tmp/review-comment.md, claude-code-action execution_file; process environment holds GITHUB_TOKEN inputs and AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN after the credentials step. Destroyed with the VM."
+    },
+    {
+      "id": "D004",
+      "name": "Pull request conversation and check runs",
+      "type": "Other",
+      "classification": "Public",
+      "encryption_at_rest": true,
+      "backup_frequency": "Continuous",
+      "description": "Where the single review comment (marker <!-- agentic-ai-review -->) is posted/updated and where the 'Agentic AI Review' check conclusion is recorded for branch protection. Public on a public repository."
+    },
+    {
+      "id": "D005",
+      "name": "GitHub Actions run logs and execution transcripts",
+      "type": "Other",
+      "classification": "Public",
+      "encryption_at_rest": true,
+      "backup_frequency": "None",
+      "description": "Step logs including 'cat' of the redacted candidate list and review output, claude-code-action transcript output, and gh/jq errors. Readable by anyone who can read the repository; retained per GitHub default (90 days)."
+    },
+    {
+      "id": "D006",
+      "name": "Demo asset root directory (files served by app/files.py)",
+      "type": "File System",
+      "classification": "Confidential",
+      "encryption_at_rest": false,
+      "backup_frequency": "None",
+      "description": "Hypothetical directory tree the demo app serves from; the README's bypass target is a secret.txt outside it (img/../../secret.txt). Exists only in tests/demo, not in this checkout."
+    }
+  ],
+  "threatActors": [
+    {
+      "id": "TA001",
+      "type": "Insider Threat",
+      "name": "Insider",
+      "sophistication_tier": "Tier 2 - Hacktivist / campaign-driven",
+      "motivations": [
+        "Financial gain",
+        "Revenge / grievance"
+      ],
+      "resources": "Individual",
+      "description": "An employee or contractor with legitimate access other than a PR-opening developer: GitHub organization owners, people who can read or rotate repository secrets, the AWS account operator who owns the Bedrock role, or a presenter running demo/reset.sh with a repo-scoped gh token. Developer-level insiders are modelled separately as TA013.",
+      "priority": 7,
+      "is_relevant": true,
+      "reviewed": true,
+      "relationship_to_target": "Internal",
+      "state_nexus": "None",
+      "targeting_specificity": "Targeted"
+    },
+    {
+      "id": "TA002",
+      "type": "External Attacker",
+      "name": "External Attacker",
+      "sophistication_tier": "Tier 1 - Opportunistic / script kiddie",
+      "motivations": [
+        "Financial gain"
+      ],
+      "resources": "Club / small group",
+      "description": "External individual or small group without repository write access: opens fork PRs (workflow steps skipped, ci.yml still runs their code without secrets), probes for an over-broad OIDC trust policy on the Bedrock role, or reads public logs and comments for leaked data.",
+      "priority": 6,
+      "is_relevant": true,
+      "reviewed": true,
+      "relationship_to_target": "External",
+      "state_nexus": "None",
+      "targeting_specificity": "Opportunistic"
+    },
+    {
+      "id": "TA003",
+      "type": "Nation-State / APT",
+      "name": "Nation-state Actor",
+      "sophistication_tier": "Tier 5 - Nation-state APT / elite",
+      "motivations": [
+        "Espionage / intelligence collection"
+      ],
+      "resources": "Government",
+      "description": "A state intelligence or military group operating with advanced capabilities",
+      "priority": 0,
+      "is_relevant": false,
+      "reviewed": true,
+      "relationship_to_target": "External",
+      "state_nexus": "State-executed",
+      "targeting_specificity": "Targeted"
+    },
+    {
+      "id": "TA004",
+      "type": "Hacktivist",
+      "name": "Hacktivist",
+      "sophistication_tier": "Tier 2 - Hacktivist / campaign-driven",
+      "motivations": [
+        "Ideological / hacktivism"
+      ],
+      "resources": "Contest / crowd",
+      "description": "Ideologically or notoriety-driven group; a public 'AI review gate' security sample is an attractive trophy ('we bypassed the AI reviewer'). Techniques overlap with TA013 if they obtain a write-access account, otherwise limited to fork PRs and publicity.",
+      "priority": 3,
+      "is_relevant": true,
+      "reviewed": true,
+      "relationship_to_target": "External",
+      "state_nexus": "None",
+      "targeting_specificity": "Sector-focused"
+    },
+    {
+      "id": "TA005",
+      "type": "Financially Motivated Cybercriminal / Organized Crime",
+      "name": "Organized Crime",
+      "sophistication_tier": "Tier 3 - Organized cybercrime",
+      "motivations": [
+        "Financial gain"
+      ],
+      "resources": "Organization",
+      "description": "Criminal groups that monetise stolen cloud and LLM API credentials (resale of Bedrock/Anthropic access, cost abuse) or use compromised developer accounts to poison widely copied sample code.",
+      "priority": 5,
+      "is_relevant": true,
+      "reviewed": true,
+      "relationship_to_target": "External",
+      "state_nexus": "None",
+      "targeting_specificity": "Opportunistic"
+    },
+    {
+      "id": "TA006",
+      "type": "Competitor / Corporate Espionage",
+      "name": "Competitor",
+      "sophistication_tier": "Tier 3 - Organized cybercrime",
+      "motivations": [
+        "Competitive advantage",
+        "Espionage / intelligence collection"
+      ],
+      "resources": "Organization",
+      "description": "A business competitor seeking competitive advantage",
+      "priority": 0,
+      "is_relevant": false,
+      "reviewed": true,
+      "relationship_to_target": "External",
+      "state_nexus": "None",
+      "targeting_specificity": "Targeted"
+    },
+    {
+      "id": "TA007",
+      "type": "Script Kiddie / Novice",
+      "name": "Script Kiddie",
+      "sophistication_tier": "Tier 1 - Opportunistic / script kiddie",
+      "motivations": [
+        "Thrill-seeking / notoriety"
+      ],
+      "resources": "Individual",
+      "description": "Inexperienced attacker using public tooling: opens noisy fork PRs, copies known prompt-injection payloads into a PR (only effective with write access), or runs secret scanners over public logs (covered in more depth by TA015).",
+      "priority": 4,
+      "is_relevant": true,
+      "reviewed": true,
+      "relationship_to_target": "External",
+      "state_nexus": "None",
+      "targeting_specificity": "Opportunistic"
+    },
+    {
+      "id": "TA008",
+      "type": "Disgruntled Employee",
+      "name": "Disgruntled Employee",
+      "sophistication_tier": "Tier 1 - Opportunistic / script kiddie",
+      "motivations": [
+        "Revenge / grievance"
+      ],
+      "resources": "Individual",
+      "description": "A current or former contributor with a grievance who still holds write access or an unrevoked personal access token; overlaps TA013 but with disruption/embarrassment rather than financial motive (e.g., merging a deliberately vulnerable change to discredit the demo).",
+      "priority": 5,
+      "is_relevant": true,
+      "reviewed": true,
+      "relationship_to_target": "Internal",
+      "state_nexus": "None",
+      "targeting_specificity": "Targeted"
+    },
+    {
+      "id": "TA009",
+      "type": "Privileged User",
+      "name": "Privileged User",
+      "sophistication_tier": "Tier 2 - Hacktivist / campaign-driven",
+      "motivations": [
+        "Financial gain"
+      ],
+      "resources": "Individual",
+      "description": "The repository maintainer/admin making mistakes rather than acting maliciously: leaving admin bypass on branch protection enabled, not requiring the 'Agentic AI Review' check, configuring an OIDC trust policy without a repository-scoped sub condition, granting the Bedrock role broader permissions than InvokeModel, or storing a long-lived ANTHROPIC_API_KEY instead of using OIDC.",
+      "priority": 6,
+      "is_relevant": true,
+      "reviewed": true,
+      "relationship_to_target": "Internal",
+      "state_nexus": "None",
+      "targeting_specificity": "Targeted"
+    },
+    {
+      "id": "TA010",
+      "type": "Third Party",
+      "name": "Third Party",
+      "sophistication_tier": "Tier 2 - Hacktivist / campaign-driven",
+      "motivations": [
+        "Financial gain"
+      ],
+      "resources": "Organization",
+      "description": "Vendors whose code or service the gate depends on: GitHub (runner, secrets, OIDC), Anthropic (claude-code-action, Claude Code CLI, model behaviour and API), AWS (STS, Bedrock), PyPI package maintainers. Risk is both compromise (see TA014) and benign change: an action update that starts injecting PR context, a model update that changes marker compliance.",
+      "priority": 6,
+      "is_relevant": true,
+      "reviewed": true,
+      "relationship_to_target": "Partner / third-party",
+      "state_nexus": "None",
+      "targeting_specificity": "Opportunistic"
+    },
+    {
+      "id": "TA011",
+      "type": "Terrorist Organization",
+      "name": "Terrorist Organization",
+      "sophistication_tier": "Tier 2 - Hacktivist / campaign-driven",
+      "motivations": [
+        "Ideological / hacktivism",
+        "Disruption / destruction"
+      ],
+      "resources": "Club / small group",
+      "description": "A group with limited offensive cyber capability, primarily using the internet for propaganda and recruitment",
+      "priority": 0,
+      "is_relevant": false,
+      "reviewed": true,
+      "relationship_to_target": "External",
+      "state_nexus": "None",
+      "targeting_specificity": "Sector-focused"
+    },
+    {
+      "id": "TA012",
+      "type": "Private Sector Offensive Actor / Cyber Mercenary",
+      "name": "Private Sector Offensive Actor",
+      "sophistication_tier": "Tier 4 - State-nexus / advanced",
+      "motivations": [
+        "Financial gain"
+      ],
+      "resources": "Organization",
+      "description": "A commercial vendor developing zero-day exploits and spyware for client-selected targets",
+      "priority": 0,
+      "is_relevant": false,
+      "reviewed": true,
+      "relationship_to_target": "External",
+      "state_nexus": "State-aligned",
+      "targeting_specificity": "Targeted"
+    },
+    {
+      "id": "TA013",
+      "type": "Insider Threat",
+      "name": "Malicious or compromised same-repository contributor",
+      "sophistication_tier": "Tier 2 - Hacktivist / campaign-driven",
+      "motivations": [
+        "Financial gain",
+        "Thrill-seeking / notoriety",
+        "Revenge / grievance"
+      ],
+      "resources": "Individual",
+      "description": "A GitHub identity with write access to the repository (a real contributor, a contributor whose account or token was phished, or a maintainer's compromised laptop). Only this actor can open pull requests that run agentic-review.yml with repository secrets and GITHUB_TOKEN. Techniques modelled by the README's attack PRs: smuggling a guard removal inside a polished feature (attack 1), prompt injection in code comments and PR body (attack 2), disarming RULES.yaml/prompts/workflow (attack 3), and exfiltrating CI secrets from a test hook (attack 4). Also able to spam pushes to drive model cost, and to edit the workflow file itself.",
+      "priority": 10,
+      "is_relevant": true,
+      "reviewed": true,
+      "relationship_to_target": "Internal",
+      "state_nexus": "None",
+      "targeting_specificity": "Targeted"
+    },
+    {
+      "id": "TA014",
+      "type": "External Attacker",
+      "name": "Software supply-chain attacker (third-party action, Claude Code CLI, Python packages)",
+      "sophistication_tier": "Tier 3 - Organized cybercrime",
+      "motivations": [
+        "Financial gain",
+        "Espionage / intelligence collection"
+      ],
+      "resources": "Team",
+      "description": "Compromises something the job executes rather than the repository: a new commit of anthropics/claude-code-action or aws-actions/configure-aws-credentials (mitigated by SHA pinning), the Claude Code CLI package the action downloads at run time (not pinned by this repo), the pytest/PyYAML wheels ci.yml installs (version-pinned but not hash-pinned), or the setup-python toolchain. Payload runs with GITHUB_TOKEN and, inside the agent steps, with the AWS session credentials. Historical precedent: tj-actions/changed-files (2025), ultralytics PyPI (2024).",
+      "priority": 7,
+      "is_relevant": true,
+      "reviewed": true,
+      "relationship_to_target": "Partner / third-party",
+      "state_nexus": "None",
+      "targeting_specificity": "Opportunistic"
+    },
+    {
+      "id": "TA015",
+      "type": "Script Kiddie / Novice",
+      "name": "Automated secret harvester scanning public GitHub artifacts",
+      "sophistication_tier": "Tier 1 - Opportunistic / script kiddie",
+      "motivations": [
+        "Financial gain"
+      ],
+      "resources": "Contest / crowd",
+      "description": "Bots that continuously scrape public repositories, Actions logs and PR comments for credential shapes (AWS keys, API keys, tokens) and immediately abuse them, typically for LLM API resale or crypto-mining. Relevant because this workflow prints redacted model output to public logs and posts it to public PR comments; anything the regex redaction misses is harvested within minutes.",
+      "priority": 6,
+      "is_relevant": true,
+      "reviewed": true,
+      "relationship_to_target": "External",
+      "state_nexus": "None",
+      "targeting_specificity": "Opportunistic"
+    }
+  ],
+  "trustZones": [
+    {
+      "id": "TZ001",
+      "name": "Pull request author (untrusted input origin)",
+      "trust_level": "Untrusted",
+      "contained_nodes": [
+        "C001"
+      ],
+      "description": "Everything a PR author controls: file contents, filenames, symlinks, commit messages, PR title/body, and for same-repo PRs the workflow file the run will execute. Authenticated identity, but content is assumed hostile (A013)."
+    },
+    {
+      "id": "TZ002",
+      "name": "GitHub SaaS platform (repository, PRs, Actions control plane, secrets, logs)",
+      "trust_level": "Medium",
+      "contained_nodes": [
+        "C002",
+        "C003",
+        "D001",
+        "D002",
+        "D004",
+        "D005"
+      ],
+      "description": "GitHub-operated services the repository relies on: git storage for main and PR branches, PR conversations and check runs, the Actions scheduler/secrets injector/OIDC issuer, and run logs. Trusted for platform integrity (secret masking, fork isolation) but the data it holds mixes trusted base-commit content with untrusted PR-head content, and logs/comments are world-readable."
+    },
+    {
+      "id": "TZ003",
+      "name": "Review job runner: deterministic CI steps",
+      "trust_level": "Medium",
+      "contained_nodes": [
+        "C004",
+        "C005",
+        "C006",
+        "C009",
+        "D003"
+      ],
+      "description": "The ubuntu-latest VM and the shell/action steps defined in agentic-review.yml: checkout, contract extraction, diff prefetch, credential assumption, capture/redact, comment posting and the gate. These steps hold GITHUB_TOKEN and AWS session credentials. Trust is only Medium because, for same-repo pull_request events, the workflow definition itself comes from the PR merge ref: without branch protection/CODEOWNERS on .github/**, the PR author can rewrite these steps (README 'What this does not solve')."
+    },
+    {
+      "id": "TZ004",
+      "name": "AI reviewer agent sandbox (LLM-driven processes)",
+      "trust_level": "Low",
+      "contained_nodes": [
+        "C007",
+        "C008"
+      ],
+      "description": "The two claude-code-action invocations. Same VM and same environment as the CI steps, but behaviour is steered by attacker-controllable text (diff, file contents, candidate list). Confined only by --allowedTools Read,Grep,Glob and --max-turns 40; its final message is treated as untrusted data by the CI steps that parse and redact it."
+    },
+    {
+      "id": "TZ005",
+      "name": "AWS account (IAM role, STS, Amazon Bedrock)",
+      "trust_level": "High",
+      "contained_nodes": [
+        "C010",
+        "C011"
+      ],
+      "description": "Maintainer-owned AWS account: the OIDC-federated IAM role for Bedrock, STS, and the Bedrock Runtime endpoints in vars.AWS_REGION. Trusted; exposure limited by the role's trust and permission policies (A009, A010)."
+    },
+    {
+      "id": "TZ006",
+      "name": "External vendors and package registries",
+      "trust_level": "Low",
+      "contained_nodes": [
+        "C012",
+        "C013"
+      ],
+      "description": "api.anthropic.com (fallback model provider), PyPI, npm/Bun registry, GitHub Releases for the Claude Code CLI, and the source repositories of the four third-party actions. Code and models fetched from here execute inside the runner with credentials present."
+    },
+    {
+      "id": "TZ007",
+      "name": "CI unit-test job (runs PR code by design)",
+      "trust_level": "Low",
+      "contained_nodes": [
+        "C014"
+      ],
+      "description": "The ci.yml job executes PR-authored tests and conftest.py for same-repo and fork PRs with contents:read only and no repository secrets. Deliberately low trust; attack 4 targets it."
+    },
+    {
+      "id": "TZ008",
+      "name": "Demo asset service (hypothetical deployment)",
+      "trust_level": "Medium",
+      "contained_nodes": [
+        "C015",
+        "D006"
+      ],
+      "description": "app/files.py and app/tokens.py plus the asset root they serve. Not deployed in this sample; modelled as the protected target whose guards the reviewer must defend."
+    }
+  ],
+  "crossingPoints": [
+    {
+      "id": "CP001",
+      "source_zone_id": "TZ001",
+      "destination_zone_id": "TZ002",
+      "connection_ids": [
+        "CN001"
+      ],
+      "authentication_method": "Multi-factor",
+      "authorization_method": "Role-based",
+      "description": "PR author pushes a branch and opens/updates a PR. GitHub authenticates the account; write access decides whether the resulting pull_request run receives secrets (same-repo) or not (fork). The content itself is never validated at this crossing."
+    },
+    {
+      "id": "CP002",
+      "source_zone_id": "TZ002",
+      "destination_zone_id": "TZ003",
+      "connection_ids": [
+        "CN003",
+        "CN004"
+      ],
+      "authentication_method": "Token",
+      "authorization_method": "Policy-based",
+      "description": "Actions control plane schedules the job on a fresh runner, injects GITHUB_TOKEN with the workflow's permissions block (contents:read, pull-requests:write, id-token:write) plus repository secrets/variables, and the checkout step clones the PR head. The workflow definition executed here is taken from the PR merge ref."
+    },
+    {
+      "id": "CP003",
+      "source_zone_id": "TZ004",
+      "destination_zone_id": "TZ003",
+      "connection_ids": [
+        "CN009",
+        "CN014"
+      ],
+      "authentication_method": "None",
+      "authorization_method": "Rule-based",
+      "description": "The agents read the workspace (prompts, base-ref rules, prefetched diff, checkout, candidate list) through Read/Grep/Glob and hand their final message back via the action's execution_file. No authentication; authorization is the --allowedTools list. The agents also inherit the runner's process environment, including AWS session credentials."
+    },
+    {
+      "id": "CP004",
+      "source_zone_id": "TZ004",
+      "destination_zone_id": "TZ005",
+      "connection_ids": [
+        "CN010",
+        "CN015"
+      ],
+      "authentication_method": "IAM Role",
+      "authorization_method": "Policy-based",
+      "description": "Agents call Bedrock Runtime with the STS session credentials (SigV4). Authorization is the role's permission policy (InvokeModel on the configured inference profiles)."
+    },
+    {
+      "id": "CP005",
+      "source_zone_id": "TZ004",
+      "destination_zone_id": "TZ006",
+      "connection_ids": [
+        "CN011",
+        "CN016",
+        "CN012",
+        "CN017"
+      ],
+      "authentication_method": "API Key",
+      "authorization_method": "None",
+      "description": "Fallback path: agents call the Anthropic Messages API with the long-lived ANTHROPIC_API_KEY. Also covers the action's run-time download of the Claude Code CLI from a public registry (no authentication, integrity depends on the action's own pinning)."
+    },
+    {
+      "id": "CP006",
+      "source_zone_id": "TZ003",
+      "destination_zone_id": "TZ002",
+      "connection_ids": [
+        "CN007",
+        "CN018",
+        "CN019",
+        "CN005"
+      ],
+      "authentication_method": "Token",
+      "authorization_method": "Policy-based",
+      "description": "CI steps call back into GitHub: actions/checkout clones the PR head with GITHUB_TOKEN (persist-credentials=false), OIDC ID-token request (id-token:write), gh api list/PATCH comments and gh pr comment (pull-requests:write), and the job conclusion that becomes the 'Agentic AI Review' check. Step logs stream into the run log."
+    },
+    {
+      "id": "CP007",
+      "source_zone_id": "TZ003",
+      "destination_zone_id": "TZ005",
+      "connection_ids": [
+        "CN008"
+      ],
+      "authentication_method": "Token",
+      "authorization_method": "Policy-based",
+      "description": "aws-actions/configure-aws-credentials presents the GitHub OIDC JWT to sts:AssumeRoleWithWebIdentity. Authorization is the role trust policy (aud = sts.amazonaws.com, sub scoped to this repository, per AWS IAM guidance)."
+    },
+    {
+      "id": "CP008",
+      "source_zone_id": "TZ004",
+      "destination_zone_id": "TZ002",
+      "connection_ids": [
+        "CN026"
+      ],
+      "authentication_method": "Token",
+      "authorization_method": "Policy-based",
+      "description": "claude-code-action holds github_token and may call the GitHub API for its own plumbing (PR context, progress tracking). Whether any of this reaches the model context is unverifiable from this repository (A011)."
+    },
+    {
+      "id": "CP009",
+      "source_zone_id": "TZ007",
+      "destination_zone_id": "TZ002",
+      "connection_ids": [
+        "CN022"
+      ],
+      "authentication_method": "Token",
+      "authorization_method": "Policy-based",
+      "description": "ci.yml checkout of the PR head with a contents:read GITHUB_TOKEN (persist-credentials=false) for same-repo and fork PRs; job conclusion becomes the 'Unit tests' check."
+    },
+    {
+      "id": "CP010",
+      "source_zone_id": "TZ007",
+      "destination_zone_id": "TZ006",
+      "connection_ids": [
+        "CN023"
+      ],
+      "authentication_method": "None",
+      "authorization_method": "None",
+      "description": "setup-python interpreter download and pip install of pytest==8.4.1 / PyYAML==6.0.2 from PyPI. Version-pinned, not hash-pinned."
+    },
+    {
+      "id": "CP011",
+      "source_zone_id": "TZ007",
+      "destination_zone_id": "TZ008",
+      "connection_ids": [
+        "CN024"
+      ],
+      "authentication_method": "None",
+      "authorization_method": "None",
+      "description": "pytest imports PR-authored tests and conftest.py and exercises app/files.py and app/tokens.py. Attack 4 uses this crossing to run exfiltration code; the job has no repository secrets and a read-only token, so the blast radius is the runner itself and the checkout."
+    }
+  ],
+  "trustBoundaries": [
+    {
+      "id": "TB001",
+      "name": "GitHub repository permission boundary",
+      "type": "Account",
+      "crossing_points": [
+        "CP001",
+        "CP002",
+        "CP009"
+      ],
+      "controls": [
+        "GitHub account authentication (2FA required for contributors, assumption)",
+        "Collaborator write permission gates same-repo PRs",
+        "Branch protection on main: required checks 'Agentic AI Review' and 'Unit tests', PR required, admin bypass disabled (A005)",
+        "Fork guard on every workflow step: head.repo.full_name == github.repository",
+        "GitHub does not pass repository secrets to fork pull_request runs",
+        "GAP: no CODEOWNERS / required review for .github/** (README 'What this does not solve')"
+      ],
+      "description": "Separates PR authors from the repository's protected branch, secrets and workflow execution context. Enforced by GitHub authentication, collaborator roles, branch protection on main, and the platform rule that fork-triggered pull_request runs receive no secrets."
+    },
+    {
+      "id": "TB002",
+      "name": "Runner VM and job permission boundary",
+      "type": "Virtual Machine",
+      "crossing_points": [
+        "CP002",
+        "CP006",
+        "CP007"
+      ],
+      "controls": [
+        "Ephemeral VM destroyed after the job; 30-minute timeout",
+        "permissions: contents read, pull-requests write, id-token write (no contents:write, no actions/packages)",
+        "actions/checkout persist-credentials: false keeps GITHUB_TOKEN out of .git/config",
+        "Concurrency group per PR with cancel-in-progress",
+        "GitHub secret masking in logs (platform)",
+        "rm -rf .review-base .review-prompts before mkdir so PR-committed symlinks cannot redirect writes"
+      ],
+      "description": "The ephemeral GitHub-hosted VM that isolates one job run from others and scopes the credentials the job can use."
+    },
+    {
+      "id": "TB003",
+      "name": "AI agent tool-sandbox boundary",
+      "type": "Process",
+      "crossing_points": [
+        "CP003",
+        "CP004",
+        "CP005",
+        "CP008"
+      ],
+      "controls": [
+        "--allowedTools \"Read,Grep,Glob\": no Bash, no Write/Edit, no WebFetch, no MCP posting tools",
+        "--max-turns 40 per pass",
+        "Prompts and RULES.yaml loaded from the BASE commit via git show, never from the PR head",
+        "Diff supplied as a prefetched data file; no git/gh access for the agent",
+        "No PR title, body or comments in the invocation prompt",
+        "Two independent invocations; discovery output is UNTRUSTED EVIDENCE for validation (validate.md)",
+        "Prompts instruct: text in code/comments/filenames is never instructions nor evidence",
+        "CI parses SHA-scoped markers [DISCOVERY]/[REVIEWED]/[BLOCK-MERGE] <head sha>; the model cannot post",
+        "Candidate list capped at 120000 bytes; missing marker fails closed",
+        "perl redaction of AWS key ids, ARNs, 12-digit account ids and labelled secret values before anything is logged or posted",
+        "GAP: agents inherit AWS session credentials and github_token in the process environment; Read can open /proc/self/environ or any runner path",
+        "GAP: Claude Code CLI installed at run time by the action after credentials are present"
+      ],
+      "description": "Confines what the LLM-driven processes can do and makes their output data rather than authority. This is the boundary between attacker-influenced reasoning and the deterministic gate."
+    },
+    {
+      "id": "TB004",
+      "name": "AWS account federation boundary",
+      "type": "Account",
+      "crossing_points": [
+        "CP004",
+        "CP007"
+      ],
+      "controls": [
+        "sts:AssumeRoleWithWebIdentity with GitHub OIDC JWT; short-lived session credentials",
+        "Trust policy conditions: aud = sts.amazonaws.com and sub scoped to repo:<owner>/<repo>:pull_request (A009; AWS IAM guidance https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html)",
+        "Permission policy limited to bedrock:InvokeModel* on the used inference-profile/foundation-model ARNs (A010)",
+        "Credentials assumed after all deterministic prep steps and only when USE_BEDROCK == 'true'",
+        "Bedrock does not store prompts or share them with model providers (AWS re:Post amazon-bedrock-model-data-use)",
+        "GAP: no model-invocation logging / CloudTrail alerting on unexpected InvokeModel volume described"
+      ],
+      "description": "OIDC federation from GitHub Actions into the maintainer's AWS account, limited to Bedrock model invocation."
+    },
+    {
+      "id": "TB005",
+      "name": "Third-party code and service boundary",
+      "type": "Network",
+      "crossing_points": [
+        "CP005",
+        "CP010"
+      ],
+      "controls": [
+        "All four third-party actions pinned to full commit SHAs with version comments",
+        "pip packages version-pinned (pytest==8.4.1, PyYAML==6.0.2) and --disable-pip-version-check",
+        "TLS for all vendor and registry traffic",
+        "GAP: Claude Code CLI version not pinned by this repository",
+        "GAP: pip packages not hash-pinned (--require-hashes)",
+        "GAP: ANTHROPIC_API_KEY fallback is a long-lived static secret"
+      ],
+      "description": "Everything fetched or called over the internet during the job: actions, the Claude Code CLI, Python packages, the Anthropic API."
+    },
+    {
+      "id": "TB006",
+      "name": "CI test-execution boundary",
+      "type": "Process",
+      "crossing_points": [
+        "CP009",
+        "CP010",
+        "CP011"
+      ],
+      "controls": [
+        "permissions: contents read only; no repository secrets in the job",
+        "persist-credentials: false on checkout",
+        "Runs on an ephemeral runner separate from the review job",
+        "GAP: outbound network from the test runner is unrestricted, so attack 4's canary POST succeeds (payload limited to a read-only token and a demo secret if one were added to this job)"
+      ],
+      "description": "ci.yml runs untrusted PR code on purpose; the boundary limits what that code can reach."
+    },
+    {
+      "id": "TB007",
+      "name": "Demo asset service input-validation boundary",
+      "type": "Process",
+      "crossing_points": [
+        "CP011"
+      ],
+      "controls": [
+        "resolve_asset: rejects empty/padded and absolute paths; resolves root and candidate with Path.resolve() (follows symlinks) and requires root == candidate or root in candidate.parents",
+        "is_file() check after containment",
+        "verify_token: hmac.compare_digest on UTF-8 bytes",
+        "describe_token: only 4-char prefix plus length ever logged",
+        "RULES.yaml no-guard-removal and no-secret-logging make weakening these guards a BLOCKING review finding"
+      ],
+      "description": "Guards in app/ that the review gate exists to protect: user-supplied path and token enter here."
+    }
+  ],
+  "assets": [
+    {
+      "id": "A014",
+      "name": "PR diff and PR-head repository content (untrusted review input)",
+      "type": "Data",
+      "classification": "Public",
+      "lifecycle_state": "Active",
+      "data_states": [
+        "At rest",
+        "In transit",
+        "In use"
+      ],
+      "description": "The base...head diff written to $RUNNER_TEMP/pr.diff plus every file in the PR-head checkout. Public code, but it is the carrier for every attack: guard removals, prompt-injection text, symlinks, a rewritten workflow. Criticality is about integrity of the judgement made on it, not confidentiality.",
+      "owner": "PR author (untrusted)",
+      "criticality": 4,
+      "metadata": {
+        "data_asset_profile": "DA-PR-CODE",
+        "attacker_controlled": true
+      }
+    },
+    {
+      "id": "A015",
+      "name": "Review contract (RULES.yaml, discovery.md, validate.md) as loaded from the BASE commit",
+      "type": "Configuration",
+      "classification": "Internal",
+      "lifecycle_state": "Active",
+      "data_states": [
+        "At rest",
+        "In use"
+      ],
+      "description": "The rules and prompts that define what the reviewer enforces. Extracted with git show $BASE_SHA:... into .review-base/ and .review-prompts/. The PR head cannot change what this run loads; changing it on main requires a merge that is itself reviewed against the previous contract.",
+      "owner": "Repository maintainer",
+      "criticality": 5,
+      "metadata": {
+        "data_asset_profile": "DA-CONTRACT",
+        "integrity_control": "base-ref extraction; rules-may-only-tighten"
+      }
+    },
+    {
+      "id": "A016",
+      "name": "Workflow definition agentic-review.yml as executed (from the PR merge ref)",
+      "type": "Configuration",
+      "classification": "Internal",
+      "lifecycle_state": "Active",
+      "data_states": [
+        "At rest",
+        "In use"
+      ],
+      "description": "Unlike RULES.yaml and the prompts, the workflow file that GitHub executes for a pull_request event comes from the PR merge ref, so a same-repo PR author can change the steps, the tool allow-list, the gate logic or the fork guard. Its integrity rests on branch protection and human review of .github/** changes, not on the base-ref mechanism.",
+      "owner": "Repository maintainer",
+      "criticality": 5,
+      "metadata": {
+        "data_asset_profile": "DA-CONTRACT",
+        "known_gap": "README: a same-repo PR can still edit the workflow itself"
+      }
+    },
+    {
+      "id": "A017",
+      "name": "GITHUB_TOKEN (job-scoped: contents read, pull-requests write, id-token write)",
+      "type": "Token",
+      "classification": "Restricted",
+      "lifecycle_state": "Active",
+      "data_states": [
+        "In transit",
+        "In use"
+      ],
+      "description": "Injected by the Actions control plane; used by checkout (not persisted), passed to claude-code-action as github_token, used by the comment step via gh, and implicitly to request the OIDC ID token. Expires when the job ends. Misuse: post/modify PR comments as github-actions[bot], request OIDC tokens.",
+      "owner": "GitHub Actions control plane",
+      "criticality": 4,
+      "metadata": {
+        "data_asset_profile": "DA-CREDS",
+        "lifetime": "job"
+      }
+    },
+    {
+      "id": "A018",
+      "name": "AWS STS session credentials for the Bedrock role",
+      "type": "Session",
+      "classification": "Restricted",
+      "lifecycle_state": "Active",
+      "data_states": [
+        "In transit",
+        "In use"
+      ],
+      "description": "AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN exported into the job environment by configure-aws-credentials; inherited by both agent steps and every later step. Valid for the role session duration (default 1 hour) even after the job ends. Misuse bounded by the role policy: InvokeModel on approved profiles (cost, model abuse).",
+      "owner": "Repository maintainer (AWS account)",
+      "criticality": 4,
+      "metadata": {
+        "data_asset_profile": "DA-CREDS",
+        "lifetime": "role session (default 1h)",
+        "scope": "bedrock:InvokeModel* (A010)"
+      }
+    },
+    {
+      "id": "A019",
+      "name": "Long-lived repository secrets: AWS_BEDROCK_ROLE_ARN and ANTHROPIC_API_KEY",
+      "type": "Credential",
+      "classification": "Restricted",
+      "lifecycle_state": "Active",
+      "data_states": [
+        "At rest",
+        "In transit",
+        "In use"
+      ],
+      "description": "AWS_BEDROCK_ROLE_ARN is a low-sensitivity identifier (useless without a valid OIDC token) but is treated as a secret so GitHub masks it. ANTHROPIC_API_KEY, when configured, is a long-lived bearer credential passed as an action input to both agent steps; exposure means unlimited model usage on the maintainer's account until rotated.",
+      "owner": "Repository maintainer",
+      "criticality": 3,
+      "metadata": {
+        "data_asset_profile": "DA-CREDS",
+        "rotation": "manual"
+      }
+    },
+    {
+      "id": "A020",
+      "name": "GitHub OIDC ID token (audience sts.amazonaws.com)",
+      "type": "Token",
+      "classification": "Restricted",
+      "lifecycle_state": "Active",
+      "data_states": [
+        "In transit"
+      ],
+      "description": "Short-lived JWT minted by GitHub for this job (claims include repository, ref, event, actor) and exchanged once at STS. Replay window is minutes; value depends entirely on how permissive the IAM trust policy is.",
+      "owner": "GitHub Actions control plane",
+      "criticality": 3,
+      "metadata": {
+        "data_asset_profile": "DA-CREDS",
+        "claims_used_by_trust_policy": [
+          "aud",
+          "sub"
+        ]
+      }
+    },
+    {
+      "id": "A021",
+      "name": "Discovery candidate list (.review-candidates.md)",
+      "type": "Data",
+      "classification": "Internal",
+      "lifecycle_state": "Active",
+      "data_states": [
+        "At rest",
+        "In use"
+      ],
+      "description": "Stage-1 model output extracted from execution_file, redacted, size-capped and checked for [DISCOVERY] <sha>. Never posted; printed to the run log. Treated by validate.md as UNTRUSTED EVIDENCE because it is model output derived from attacker text.",
+      "owner": "Review workflow",
+      "criticality": 3,
+      "metadata": {
+        "data_asset_profile": "DA-VERDICT",
+        "max_bytes": 120000
+      }
+    },
+    {
+      "id": "A022",
+      "name": "Validation verdict (review-output.md) and SHA-scoped markers",
+      "type": "Data",
+      "classification": "Public",
+      "lifecycle_state": "Active",
+      "data_states": [
+        "At rest",
+        "In transit",
+        "In use"
+      ],
+      "description": "Stage-2 model output. The gate's decision is a pure function of this text: [REVIEWED] <head sha> must be present, [BLOCK-MERGE] <head sha> must be absent. Posted (redacted) as the PR comment. Forging or suppressing markers is the direct route to a false pass.",
+      "owner": "Review workflow",
+      "criticality": 5,
+      "metadata": {
+        "data_asset_profile": "DA-VERDICT",
+        "markers": [
+          "[REVIEWED] <sha>",
+          "[BLOCK-MERGE] <sha>"
+        ]
+      }
+    },
+    {
+      "id": "A023",
+      "name": "'Agentic AI Review' check-run conclusion on the PR head SHA",
+      "type": "Process",
+      "classification": "Public",
+      "lifecycle_state": "Active",
+      "data_states": [
+        "At rest",
+        "In use"
+      ],
+      "description": "The job exit code as recorded by GitHub. Branch protection consumes it. It is the only artifact that actually blocks or allows a merge; everything else is evidence.",
+      "owner": "GitHub Actions control plane",
+      "criticality": 5,
+      "metadata": {
+        "data_asset_profile": "DA-VERDICT",
+        "consumer": "branch protection required status check"
+      }
+    },
+    {
+      "id": "A024",
+      "name": "Run logs and execution transcripts",
+      "type": "Data",
+      "classification": "Public",
+      "lifecycle_state": "Active",
+      "data_states": [
+        "At rest"
+      ],
+      "description": "Step output including cat of the redacted candidates and verdict, gh/jq stderr, and the action's own transcript output. Public on a public repository. Any redaction miss becomes a public disclosure harvested by bots (TA015).",
+      "owner": "GitHub",
+      "criticality": 2,
+      "metadata": {
+        "data_asset_profile": "DA-LOGS",
+        "retention": "GitHub default 90 days"
+      }
+    },
+    {
+      "id": "A025",
+      "name": "Demo asset service API token and asset-root files",
+      "type": "Credential",
+      "classification": "Confidential",
+      "lifecycle_state": "Active",
+      "data_states": [
+        "At rest",
+        "In use"
+      ],
+      "description": "The expected token compared by verify_token and the files reachable through resolve_asset. Hypothetical in this sample; represents what a merged guard removal would expose in a real deployment (README bypass: img/../../secret.txt).",
+      "owner": "Demo application",
+      "criticality": 3,
+      "metadata": {
+        "data_asset_profile": "DA-APP"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "id": "F001",
+      "asset_id": "A014",
+      "source_id": "C001",
+      "destination_id": "D001",
+      "transformation_type": null,
+      "controls": [
+        "Authentication",
+        "Authorization",
+        "Audit Logging"
+      ],
+      "description": "Author pushes branch content and opens/updates the PR. Identity is authenticated and write-authorised; content is not validated.",
+      "protocol": "HTTPS/git",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": false,
+      "risk_level": 4
+    },
+    {
+      "id": "F002",
+      "asset_id": "A014",
+      "source_id": "D001",
+      "destination_id": "D003",
+      "transformation_type": "Processing",
+      "controls": [
+        "Authentication",
+        "Integrity Check"
+      ],
+      "description": "actions/checkout clones the PR head (fetch-depth 0); git diff base...head is written to $RUNNER_TEMP/pr.diff. Only check: the diff must be non-empty.",
+      "protocol": "HTTPS/git, local FS",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 4
+    },
+    {
+      "id": "F003",
+      "asset_id": "A014",
+      "source_id": "D003",
+      "destination_id": "C007",
+      "transformation_type": "Processing",
+      "controls": [
+        "Other"
+      ],
+      "description": "Discovery agent reads the prefetched diff and any repository file with Read/Grep/Glob. This is where attacker text meets the model; the only defence is the prompt's instruction to treat in-code text as neither instruction nor evidence.",
+      "protocol": "local FS via tool calls",
+      "encryption": false,
+      "authenticated": false,
+      "authorized": true,
+      "validated": false,
+      "risk_level": 5
+    },
+    {
+      "id": "F004",
+      "asset_id": "A014",
+      "source_id": "D003",
+      "destination_id": "C008",
+      "transformation_type": "Processing",
+      "controls": [
+        "Other"
+      ],
+      "description": "Validation agent independently re-reads the diff and repository files to falsify candidates.",
+      "protocol": "local FS via tool calls",
+      "encryption": false,
+      "authenticated": false,
+      "authorized": true,
+      "validated": false,
+      "risk_level": 5
+    },
+    {
+      "id": "F005",
+      "asset_id": "A014",
+      "source_id": "C007",
+      "destination_id": "C011",
+      "transformation_type": null,
+      "controls": [
+        "Encryption",
+        "Authentication",
+        "Authorization"
+      ],
+      "description": "Diff and read file content travel to Bedrock inside the model prompt. Public code; Bedrock does not store or share prompts.",
+      "protocol": "HTTPS (SigV4)",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": false,
+      "risk_level": 1
+    },
+    {
+      "id": "F006",
+      "asset_id": "A014",
+      "source_id": "D001",
+      "destination_id": "C014",
+      "transformation_type": "Processing",
+      "controls": [
+        "Access Control",
+        "Authorization"
+      ],
+      "description": "ci.yml checks out and executes PR-authored tests/conftest.py. The job has a read-only token and no secrets, so attack 4 can only exfiltrate what is on that runner.",
+      "protocol": "HTTPS/git, python",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": false,
+      "risk_level": 3
+    },
+    {
+      "id": "F007",
+      "asset_id": "A015",
+      "source_id": "D001",
+      "destination_id": "D003",
+      "transformation_type": "Verification",
+      "controls": [
+        "Integrity Check",
+        "Input Validation"
+      ],
+      "description": "CONTROL 1: git show $BASE_SHA:RULES.yaml and both prompts into freshly recreated scratch dirs; the job exits 1 if a prompt is missing or empty on base.",
+      "protocol": "git plumbing, local FS",
+      "encryption": false,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 2
+    },
+    {
+      "id": "F008",
+      "asset_id": "A015",
+      "source_id": "D003",
+      "destination_id": "C007",
+      "transformation_type": null,
+      "controls": [
+        "Integrity Check"
+      ],
+      "description": "Agents read .review-prompts/discovery.md or validate.md and .review-base/RULES.yaml. The invoking prompt says the file is the complete instruction set.",
+      "protocol": "local FS via tool calls",
+      "encryption": false,
+      "authenticated": false,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 2
+    },
+    {
+      "id": "F009",
+      "asset_id": "A015",
+      "source_id": "D003",
+      "destination_id": "C008",
+      "transformation_type": null,
+      "controls": [
+        "Integrity Check"
+      ],
+      "description": "Validation agent reads validate.md and the base-ref RULES.yaml (authoritative blocking flags).",
+      "protocol": "local FS via tool calls",
+      "encryption": false,
+      "authenticated": false,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 2
+    },
+    {
+      "id": "F010",
+      "asset_id": "A016",
+      "source_id": "D001",
+      "destination_id": "C003",
+      "transformation_type": null,
+      "controls": [
+        "Access Control"
+      ],
+      "description": "For pull_request events GitHub loads agentic-review.yml from the PR merge ref, so the PR author controls the steps that will run. No base-ref protection applies to the workflow file itself.",
+      "protocol": "GitHub internal",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": false,
+      "risk_level": 5
+    },
+    {
+      "id": "F011",
+      "asset_id": "A016",
+      "source_id": "C003",
+      "destination_id": "C004",
+      "transformation_type": "Processing",
+      "controls": [
+        "Access Control"
+      ],
+      "description": "Runner executes the loaded workflow definition with the declared permissions and secrets.",
+      "protocol": "GitHub internal",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": false,
+      "risk_level": 4
+    },
+    {
+      "id": "F012",
+      "asset_id": "A017",
+      "source_id": "C003",
+      "destination_id": "C004",
+      "transformation_type": null,
+      "controls": [
+        "Access Control",
+        "Authorization"
+      ],
+      "description": "Job-scoped GITHUB_TOKEN injected with contents:read, pull-requests:write, id-token:write.",
+      "protocol": "GitHub internal",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 3
+    },
+    {
+      "id": "F013",
+      "asset_id": "A017",
+      "source_id": "C004",
+      "destination_id": "C005",
+      "transformation_type": null,
+      "controls": [
+        "Access Control",
+        "Authentication"
+      ],
+      "description": "checkout uses the token for the clone; persist-credentials=false prevents it from being written to .git/config where the agent could Read it.",
+      "protocol": "HTTPS/git",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 2
+    },
+    {
+      "id": "F014",
+      "asset_id": "A017",
+      "source_id": "C004",
+      "destination_id": "C007",
+      "transformation_type": null,
+      "controls": [
+        "Access Control"
+      ],
+      "description": "github_token passed as an input to claude-code-action in both passes. Lives in the action's process environment next to the model-driven agent.",
+      "protocol": "action input / env",
+      "encryption": false,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 4
+    },
+    {
+      "id": "F015",
+      "asset_id": "A017",
+      "source_id": "C004",
+      "destination_id": "C008",
+      "transformation_type": null,
+      "controls": [
+        "Access Control"
+      ],
+      "description": "github_token passed to the validation pass.",
+      "protocol": "action input / env",
+      "encryption": false,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 4
+    },
+    {
+      "id": "F016",
+      "asset_id": "A017",
+      "source_id": "C009",
+      "destination_id": "D004",
+      "transformation_type": null,
+      "controls": [
+        "Authentication",
+        "Authorization",
+        "Audit Logging"
+      ],
+      "description": "GH_TOKEN used by gh api / gh pr comment to find, patch or create the single bot comment.",
+      "protocol": "HTTPS",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 2
+    },
+    {
+      "id": "F017",
+      "asset_id": "A017",
+      "source_id": "C003",
+      "destination_id": "C014",
+      "transformation_type": null,
+      "controls": [
+        "Access Control",
+        "Authorization"
+      ],
+      "description": "ci.yml's separate GITHUB_TOKEN is contents:read only; it is the only credential present while PR test code runs.",
+      "protocol": "GitHub internal",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 2
+    },
+    {
+      "id": "F018",
+      "asset_id": "A020",
+      "source_id": "C003",
+      "destination_id": "C006",
+      "transformation_type": null,
+      "controls": [
+        "Authentication",
+        "Authorization"
+      ],
+      "description": "configure-aws-credentials requests the OIDC ID token from the Actions issuer using ACTIONS_ID_TOKEN_REQUEST_TOKEN (requires id-token: write).",
+      "protocol": "HTTPS",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 2
+    },
+    {
+      "id": "F019",
+      "asset_id": "A020",
+      "source_id": "C006",
+      "destination_id": "C010",
+      "transformation_type": "Verification",
+      "controls": [
+        "Authentication",
+        "Authorization",
+        "Integrity Check"
+      ],
+      "description": "sts:AssumeRoleWithWebIdentity presents the JWT; STS validates signature, aud and the trust policy's sub condition (A009).",
+      "protocol": "HTTPS",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 3
+    },
+    {
+      "id": "F020",
+      "asset_id": "A018",
+      "source_id": "C010",
+      "destination_id": "D003",
+      "transformation_type": null,
+      "controls": [
+        "Encryption",
+        "Access Control"
+      ],
+      "description": "STS returns session credentials; the action exports AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN into the job environment for all later steps. GitHub masks the values in logs.",
+      "protocol": "HTTPS then process env",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 4
+    },
+    {
+      "id": "F021",
+      "asset_id": "A018",
+      "source_id": "D003",
+      "destination_id": "C007",
+      "transformation_type": null,
+      "controls": [
+        "Access Control"
+      ],
+      "description": "Discovery agent inherits the AWS session credentials from the environment (needed to sign Bedrock calls). The Read tool can also open /proc/self/environ or any file on the runner, so a prompt-injected agent can quote them into its output.",
+      "protocol": "process env",
+      "encryption": false,
+      "authenticated": false,
+      "authorized": true,
+      "validated": false,
+      "risk_level": 5
+    },
+    {
+      "id": "F022",
+      "asset_id": "A018",
+      "source_id": "D003",
+      "destination_id": "C008",
+      "transformation_type": null,
+      "controls": [
+        "Access Control"
+      ],
+      "description": "Validation agent inherits the same session credentials.",
+      "protocol": "process env",
+      "encryption": false,
+      "authenticated": false,
+      "authorized": true,
+      "validated": false,
+      "risk_level": 5
+    },
+    {
+      "id": "F023",
+      "asset_id": "A018",
+      "source_id": "C008",
+      "destination_id": "C011",
+      "transformation_type": "Signing",
+      "controls": [
+        "Encryption",
+        "Authentication",
+        "Authorization"
+      ],
+      "description": "Credentials are used only to SigV4-sign Bedrock Runtime requests.",
+      "protocol": "HTTPS (SigV4)",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 1
+    },
+    {
+      "id": "F024",
+      "asset_id": "A019",
+      "source_id": "D002",
+      "destination_id": "C004",
+      "transformation_type": null,
+      "controls": [
+        "Access Control",
+        "Encryption"
+      ],
+      "description": "Repository secrets and variables injected into the same-repo run: AWS_BEDROCK_ROLE_ARN feeds the USE_BEDROCK presence test and role-to-assume; ANTHROPIC_API_KEY (if set) feeds the anthropic_api_key input.",
+      "protocol": "GitHub internal",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 3
+    },
+    {
+      "id": "F025",
+      "asset_id": "A019",
+      "source_id": "C004",
+      "destination_id": "C007",
+      "transformation_type": null,
+      "controls": [
+        "Access Control"
+      ],
+      "description": "ANTHROPIC_API_KEY passed as action input to both agent steps even when Bedrock is in use (empty string when unset). Long-lived; exposure requires rotation.",
+      "protocol": "action input / env",
+      "encryption": false,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 3
+    },
+    {
+      "id": "F026",
+      "asset_id": "A019",
+      "source_id": "C007",
+      "destination_id": "C012",
+      "transformation_type": null,
+      "controls": [
+        "Encryption",
+        "Authentication"
+      ],
+      "description": "Fallback model calls authenticate to api.anthropic.com with the static key.",
+      "protocol": "HTTPS",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 2
+    },
+    {
+      "id": "F027",
+      "asset_id": "A021",
+      "source_id": "C007",
+      "destination_id": "C009",
+      "transformation_type": "Redaction",
+      "controls": [
+        "Integrity Check",
+        "Input Validation",
+        "Output Encoding"
+      ],
+      "description": "Capture step reads the discovery execution_file with jq, writes .review-candidates.md, perl-redacts credential shapes, fails closed if [DISCOVERY] <sha> is missing or size > 120000 bytes, then cats it to the log.",
+      "protocol": "local FS",
+      "encryption": false,
+      "authenticated": false,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 3
+    },
+    {
+      "id": "F028",
+      "asset_id": "A021",
+      "source_id": "D003",
+      "destination_id": "C008",
+      "transformation_type": null,
+      "controls": [
+        "Other"
+      ],
+      "description": "Validation agent reads the candidate list, instructed to treat it as UNTRUSTED EVIDENCE and to re-derive every finding from code.",
+      "protocol": "local FS via tool calls",
+      "encryption": false,
+      "authenticated": false,
+      "authorized": true,
+      "validated": false,
+      "risk_level": 3
+    },
+    {
+      "id": "F029",
+      "asset_id": "A021",
+      "source_id": "C009",
+      "destination_id": "D005",
+      "transformation_type": "Redaction",
+      "controls": [
+        "Output Encoding"
+      ],
+      "description": "Redacted candidate list printed to the public run log ('never posted' as a comment, but logged).",
+      "protocol": "GitHub logs",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 3
+    },
+    {
+      "id": "F030",
+      "asset_id": "A022",
+      "source_id": "C008",
+      "destination_id": "C009",
+      "transformation_type": "Redaction",
+      "controls": [
+        "Integrity Check",
+        "Output Encoding"
+      ],
+      "description": "Capture step extracts the validation result from execution_file, redacts it into review-output.md; the gate then greps for [REVIEWED] <sha> and [BLOCK-MERGE] <sha>.",
+      "protocol": "local FS",
+      "encryption": false,
+      "authenticated": false,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 4
+    },
+    {
+      "id": "F031",
+      "asset_id": "A022",
+      "source_id": "C009",
+      "destination_id": "D004",
+      "transformation_type": null,
+      "controls": [
+        "Authentication",
+        "Authorization"
+      ],
+      "description": "Comment step builds /tmp/review-comment.md (marker, heading, verdict line, model output) and posts/updates the github-actions[bot] comment on the PR.",
+      "protocol": "HTTPS",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 3
+    },
+    {
+      "id": "F032",
+      "asset_id": "A022",
+      "source_id": "C009",
+      "destination_id": "D005",
+      "transformation_type": "Redaction",
+      "controls": [
+        "Output Encoding"
+      ],
+      "description": "Redacted verdict printed to the public run log.",
+      "protocol": "GitHub logs",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 3
+    },
+    {
+      "id": "F033",
+      "asset_id": "A023",
+      "source_id": "C009",
+      "destination_id": "C003",
+      "transformation_type": "Verification",
+      "controls": [
+        "Integrity Check"
+      ],
+      "description": "Gate step exit code (1 on any abnormal path or [BLOCK-MERGE]) becomes the job conclusion.",
+      "protocol": "GitHub internal",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 5
+    },
+    {
+      "id": "F034",
+      "asset_id": "A023",
+      "source_id": "C003",
+      "destination_id": "D004",
+      "transformation_type": null,
+      "controls": [
+        "Access Control",
+        "Authorization"
+      ],
+      "description": "Check run 'Agentic AI Review' recorded on the head SHA; branch protection reads it to allow or block the merge (A005). On fork PRs the job name differs and every step is skipped, so the required check never turns green.",
+      "protocol": "GitHub internal",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 4
+    },
+    {
+      "id": "F035",
+      "asset_id": "A024",
+      "source_id": "C003",
+      "destination_id": "D005",
+      "transformation_type": null,
+      "controls": [
+        "Access Control",
+        "Audit Logging"
+      ],
+      "description": "All step output and the action's transcript are persisted as run logs, readable by anyone with repository read access.",
+      "protocol": "GitHub internal",
+      "encryption": true,
+      "authenticated": true,
+      "authorized": true,
+      "validated": false,
+      "risk_level": 2
+    },
+    {
+      "id": "F036",
+      "asset_id": "A025",
+      "source_id": "C015",
+      "destination_id": "D006",
+      "transformation_type": "Verification",
+      "controls": [
+        "Input Validation",
+        "Authorization",
+        "Authentication",
+        "Audit Logging"
+      ],
+      "description": "resolve_asset()/read_asset() open files under asset_root after rejecting empty/padded/absolute paths and any resolved path outside the resolved root; verify_token() gates access with a constant-time compare and logs only a redacted token.",
+      "protocol": "local FS",
+      "encryption": false,
+      "authenticated": true,
+      "authorized": true,
+      "validated": true,
+      "risk_level": 3
+    }
+  ],
+  "residualRiskAssessments": [
+    {
+      "threat_id": "T001",
+      "decision": "Open",
+      "residual_severity": "High",
+      "residual_likelihood": "Unlikely",
+      "rationale": "Code-only tools, no PR prose in context, base-ref prompts, two independent passes and SHA-scoped markers make a successful injection much harder, but the verdict is still model output read from attacker text. Impact is unchanged (vulnerable code merges). Stays open pending empirical measurement after every model/prompt change (M056) and Read path restrictions (M051).",
+      "is_current": true
+    },
+    {
+      "threat_id": "T002",
+      "decision": "Open",
+      "residual_severity": "High",
+      "residual_likelihood": "Possible",
+      "rationale": "The rules name the exact weak replacements and the validation pass must ground each finding in code, yet detection of a well-disguised three-line change is probabilistic. The README itself says the design is not a proof and must be measured; no measurement results ship with this checkout.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T003",
+      "decision": "Open",
+      "residual_severity": "Critical",
+      "residual_likelihood": "Likely",
+      "rationale": "Nothing in the repository prevents a same-repo PR from rewriting agentic-review.yml, and GitHub runs the PR's version for pull_request events. The rules-may-only-tighten rule is enforced by the file being attacked. This is the top residual risk; it needs CODEOWNERS plus a code-owner-review ruleset (M046) now and a default-branch workflow_run lane (M047) for a durable fix.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T004",
+      "decision": "Mitigated",
+      "residual_severity": "Medium",
+      "residual_likelihood": "Unlikely",
+      "rationale": "The PR under review cannot alter what it is reviewed against (git show from BASE_SHA, exit 1 on a missing prompt), and weakening the contract is a blocking rule whose flag the validation prompt treats as authoritative. A disarming diff to RULES.yaml is also conspicuous. Remaining exposure runs through T003 (workflow edit), which is tracked separately.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T005",
+      "decision": "Open",
+      "residual_severity": "Critical",
+      "residual_likelihood": "Possible",
+      "rationale": "Branch protection cannot be expressed or verified in the checkout, the README no longer documents it, and the check was renamed this session so an existing rule may still reference 'Hardened AI Review'. Until a ruleset requires 'Agentic AI Review' and 'Unit tests' with no bypass actors (M048), the gate is advisory.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T006",
+      "decision": "Open",
+      "residual_severity": "High",
+      "residual_likelihood": "Unlikely",
+      "rationale": "The agent has no network or execution tool, so exfiltration needs a successful injection (T001) plus the CI comment/log channel; the checkout token is not persisted. But the redaction misses raw secret keys, session tokens and ghs_/sk-ant- prefixes, the API key is passed even when Bedrock is used, and Read can open /proc and $RUNNER_TEMP. M051, M052 and M049 (short sessions) are all low-cost.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T007",
+      "decision": "Open",
+      "residual_severity": "High",
+      "residual_likelihood": "Unlikely",
+      "rationale": "All actions are SHA-pinned and test dependencies version-pinned, which removes the tag-mutation vector. The Claude Code CLI is still downloaded at run time inside the action after AWS credentials exist, and pip is not hash-pinned. Low likelihood, high impact; close with M054.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T008",
+      "decision": "Mitigated",
+      "residual_severity": "Low",
+      "residual_likelihood": "Unlikely",
+      "rationale": "--allowedTools \"Read,Grep,Glob\" in both passes gives the agent nothing that executes; the README reports the tool denial as visible in transcripts. The only route to re-enable it is editing the workflow, which is T003.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T009",
+      "decision": "Accepted",
+      "residual_severity": "Low",
+      "residual_likelihood": "Likely",
+      "rationale": "Running PR-authored tests is the purpose of ci.yml. The job holds only a contents:read token that is not persisted and no repository secrets, so the blast radius is public code. Accepted on condition that no secrets are ever added to the test job's environment.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T010",
+      "decision": "Open",
+      "residual_severity": "Medium",
+      "residual_likelihood": "Possible",
+      "rationale": "Using OIDC instead of static keys is the right pattern, but the trust policy's aud/sub conditions live in AWS and were not verified. AWS documentation is explicit that an unscoped sub lets any repository assume the role. Open until the maintainer confirms the repository-scoped condition (M049).",
+      "is_current": true
+    },
+    {
+      "threat_id": "T011",
+      "decision": "Open",
+      "residual_severity": "Medium",
+      "residual_likelihood": "Possible",
+      "rationale": "Role permissions are outside the repository and unverified; the workflow also uses the default 1-hour session. Bounded impact if the policy is InvokeModel-only on the named profiles as the README instructs; open until confirmed and role-duration-seconds is shortened (M049).",
+      "is_current": true
+    },
+    {
+      "threat_id": "T012",
+      "decision": "Accepted",
+      "residual_severity": "Medium",
+      "residual_likelihood": "Possible",
+      "rationale": "Per-PR cost is bounded by the concurrency group, 30-minute timeout, 40-turn caps and the candidate-size cap, and the README explicitly accepts two model calls per PR as a cost of the design. Cross-PR abuse remains possible; an account-level budget alarm and draft-PR skip (M050) are recommended but not blocking for a demo repository.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T013",
+      "decision": "Accepted",
+      "residual_severity": "Low",
+      "residual_likelihood": "Likely",
+      "rationale": "Failing closed on vendor outages is the intended behaviour; the cost is a delayed merge and a manual re-run, which the posted comment already instructs. A bounded retry (M060) would reduce friction but must never convert a failure into a pass.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T014",
+      "decision": "Accepted",
+      "residual_severity": "Low",
+      "residual_likelihood": "Possible",
+      "rationale": "The validation prompt's falsification step, 80-point confidence floor and closed BLOCKING list are the available levers; residual false blocks are a property of using a model and the README says so. Track the rate alongside the attack corpus (M056) and define a code-owner override that does not weaken the check (M060).",
+      "is_current": true
+    },
+    {
+      "threat_id": "T015",
+      "decision": "Open",
+      "residual_severity": "Medium",
+      "residual_likelihood": "Possible",
+      "rationale": "Only a lower bound on diff size exists, so an attacker can dilute a small guard removal in a large or obfuscated diff and exhaust the agents' turns. A size ceiling and Trojan-Source character check in the prefetch step (M053) are a few lines of shell.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T016",
+      "decision": "Mitigated",
+      "residual_severity": "Low",
+      "residual_likelihood": "Unlikely",
+      "rationale": "Every scratch path is removed before it is written, pr.diff lives outside the checkout, and no PR code runs in the review job before those writes. No further action.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T017",
+      "decision": "Accepted",
+      "residual_severity": "Low",
+      "residual_likelihood": "Possible",
+      "rationale": "The merge decision comes from the check run, not from comments, and the updater filters on the bot author plus marker. A look-alike comment can only mislead a human reader; adding run id/SHA to the marker and documenting the check run as authoritative (M057) is cheap hygiene.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T018",
+      "decision": "Accepted",
+      "residual_severity": "Low",
+      "residual_likelihood": "Possible",
+      "rationale": "Check-run annotations and run logs preserve the verdict for the log retention period; the comment is editable by design of GitHub. For a demo repository this is acceptable; upload artifacts (M055) if the pattern is reused where audit evidence matters.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T019",
+      "decision": "Open",
+      "residual_severity": "Medium",
+      "residual_likelihood": "Unlikely",
+      "rationale": "The allow-list and the gate's reliance on the captured execution_file (not comments) contain the impact, but whether claude-code-action exposes any GitHub write path to the model despite --allowedTools was not inspected at the pinned SHA. Open until that is reviewed as part of the action-update process (M054).",
+      "is_current": true
+    },
+    {
+      "threat_id": "T020",
+      "decision": "Mitigated",
+      "residual_severity": "Low",
+      "residual_likelihood": "Unlikely",
+      "rationale": "Only the pull_request trigger is used, every step carries the fork guard, the job name differs on forks and GitHub withholds secrets from fork runs. This is a design constraint to preserve: any future fork lane must follow M047, never pull_request_target with a head checkout.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T021",
+      "decision": "Not Applicable",
+      "residual_severity": null,
+      "residual_likelihood": null,
+      "rationale": "The repository is public and Apache-2.0; the diff and source carry no confidentiality requirement, and the primary Bedrock path does not store or share prompts per AWS documentation. Becomes relevant only if the pattern is reused on non-public code (M059).",
+      "is_current": true
+    },
+    {
+      "threat_id": "T022",
+      "decision": "Open",
+      "residual_severity": "Low",
+      "residual_likelihood": "Possible",
+      "rationale": "Only a boolean is exposed and the credentials step's run/skip status reveals the same, so the risk is informational. Still open because the fix (move the env block under the job, M058) is trivial, was verified on copies this session, and clears the ASH finding.",
+      "is_current": true
+    },
+    {
+      "threat_id": "T023",
+      "decision": "Mitigated",
+      "residual_severity": "Low",
+      "residual_likelihood": "Unlikely",
+      "rationale": "resolve_asset rejects empty, padded and absolute paths and requires the fully resolved candidate to be the root or under it, which defeats img/../../secret.txt and symlink escapes. The no-guard-removal rule exists to keep this true; residual risk is T002 (a false negative on a future weakening).",
+      "is_current": true
+    },
+    {
+      "threat_id": "T024",
+      "decision": "Mitigated",
+      "residual_severity": "Low",
+      "residual_likelihood": "Unlikely",
+      "rationale": "hmac.compare_digest removes the timing channel and describe_token limits logs to a 4-character prefix plus length; the semgrep hit on the format string is a false positive by design. The no-secret-logging rule guards against regression.",
+      "is_current": true
+    }
+  ],
+  "softwareProfile": {
+    "software_type": "Developer Tooling / CI-CD System",
+    "deployment_model": "SaaS",
+    "architecture_style": "Event-driven",
+    "platform_runtime": "Cloud runtime",
+    "user_domain": "Security",
+    "licensing_ownership": "Open source",
+    "modern_paradigms": [
+      "Agentic AI",
+      "AI/ML",
+      "Cloud-native",
+      "Event-driven architecture"
+    ],
+    "description": "GitHub Actions workflow triggered by pull_request events (opened/synchronize/reopened). Job steps: checkout (persist-credentials=false, fetch-depth 0) -> extract RULES.yaml and prompts from BASE sha into .review-base/.review-prompts (fail if missing) -> prefetch diff base...head into $RUNNER_TEMP/pr.diff (fail if empty) -> assume AWS role via OIDC (aws-actions/configure-aws-credentials, only if AWS_BEDROCK_ROLE_ARN set) -> Discovery pass (anthropics/claude-code-action, model DISCOVERY_MODEL default us.anthropic.claude-sonnet-4-6, --allowedTools Read,Grep,Glob, --max-turns 40) -> capture candidates from execution_file, redact, fail closed on missing [DISCOVERY] marker or >120000 bytes -> Validation pass (same action, model VALIDATION_MODEL default us.anthropic.claude-opus-4-8) -> capture+redact review-output.md -> CI step posts/updates ONE PR comment keyed by hidden marker via gh api (GITHUB_TOKEN) -> gate step exits 1 unless [REVIEWED] <head sha> present and [BLOCK-MERGE] <head sha> absent. Every step is guarded by head.repo.full_name == github.repository (fork guard). Third-party actions are pinned by commit SHA. Permissions: contents read, pull-requests write, id-token write. Concurrency group per PR with cancel-in-progress. A separate ci.yml runs pytest. The demo app is a pure-Python library (no HTTP layer in this checkout)."
+  },
+  "dataAssetProfiles": [
+    {
+      "id": "DP001",
+      "name": "Pull request diff and repository source code",
+      "asset_id": "DA-PR-CODE",
+      "structural_category": "Unstructured Data",
+      "content_types": [
+        "Non-sensitive / other"
+      ],
+      "sensitivity_tier": "Public",
+      "compliance_regimes": [
+        "None"
+      ],
+      "data_states": [
+        "At rest",
+        "In transit",
+        "In use"
+      ],
+      "volume_tier": "Small",
+      "lifecycle_state": "Active",
+      "business_domain": "Engineering",
+      "description": "Attacker-controllable input: the base...head diff prefetched to $RUNNER_TEMP/pr.diff plus the full checkout the agent may Read/Grep/Glob. Public Apache-2.0 code, so confidentiality is low; integrity of what the reviewer judges is what matters."
+    },
+    {
+      "id": "DP002",
+      "name": "Review contract: RULES.yaml, review prompts, agentic-review.yml",
+      "asset_id": "DA-CONTRACT",
+      "structural_category": "Configuration Data",
+      "content_types": [
+        "System metadata"
+      ],
+      "sensitivity_tier": "Internal",
+      "compliance_regimes": [
+        "None"
+      ],
+      "data_states": [
+        "At rest",
+        "In use"
+      ],
+      "volume_tier": "Small",
+      "lifecycle_state": "Active",
+      "business_domain": "Engineering",
+      "description": "Defines what the reviewer enforces and how the gate decides. Read from the BASE commit at runtime. Integrity-critical: weakening it is itself a blocking violation (rules-may-only-tighten). The workflow file itself is only protected by repository branch protection/CODEOWNERS, which this repo does not ship."
+    },
+    {
+      "id": "DP003",
+      "name": "Workflow credentials: GITHUB_TOKEN, AWS OIDC role ARN and STS session credentials, ANTHROPIC_API_KEY",
+      "asset_id": "DA-CREDS",
+      "structural_category": "Secrets and Credentials",
+      "content_types": [
+        "Authentication credentials"
+      ],
+      "sensitivity_tier": "Restricted",
+      "compliance_regimes": [
+        "None"
+      ],
+      "data_states": [
+        "In transit",
+        "In use"
+      ],
+      "volume_tier": "Small",
+      "lifecycle_state": "Active",
+      "business_domain": "Engineering",
+      "description": "GITHUB_TOKEN (contents:read, pull-requests:write, id-token:write) is handed to claude-code-action and the comment step; short-lived AWS credentials from aws-actions/configure-aws-credentials live in the job environment for the model-call steps; ANTHROPIC_API_KEY is an optional fallback. Exposure enables PR-comment spoofing, model-invocation cost abuse, or Bedrock access within the role's policy."
+    },
+    {
+      "id": "DP004",
+      "name": "Model outputs: discovery candidates, validation verdict, posted PR comment",
+      "asset_id": "DA-VERDICT",
+      "structural_category": "Unstructured Data",
+      "content_types": [
+        "Operational / telemetry data"
+      ],
+      "sensitivity_tier": "Internal",
+      "compliance_regimes": [
+        "None"
+      ],
+      "data_states": [
+        "At rest",
+        "In transit",
+        "In use"
+      ],
+      "volume_tier": "Small",
+      "lifecycle_state": "Active",
+      "business_domain": "Engineering",
+      "description": ".review-candidates.md (never posted), review-output.md (posted after regex redaction), and the SHA-scoped markers the gate parses. Integrity of the verdict is the whole point of the system; the comment is public on a public repo."
+    },
+    {
+      "id": "DP005",
+      "name": "Workflow run logs and Claude execution transcripts",
+      "asset_id": "DA-LOGS",
+      "structural_category": "Semi-Structured Data",
+      "content_types": [
+        "Operational / telemetry data"
+      ],
+      "sensitivity_tier": "Internal",
+      "compliance_regimes": [
+        "None"
+      ],
+      "data_states": [
+        "At rest"
+      ],
+      "volume_tier": "Small",
+      "lifecycle_state": "Active",
+      "business_domain": "Engineering",
+      "description": "GitHub Actions logs (the workflow cats redacted candidates and review output) and the claude-code-action execution_file. Readable by anyone with read access to the repository; on a public repository that is everyone."
+    },
+    {
+      "id": "DP006",
+      "name": "Demo asset service data: API token and files under the asset root",
+      "asset_id": "DA-APP",
+      "structural_category": "Secrets and Credentials",
+      "content_types": [
+        "Authentication credentials",
+        "Non-sensitive / other"
+      ],
+      "sensitivity_tier": "Confidential",
+      "compliance_regimes": [
+        "None"
+      ],
+      "data_states": [
+        "At rest",
+        "In use"
+      ],
+      "volume_tier": "Small",
+      "lifecycle_state": "Active",
+      "business_domain": "Engineering",
+      "description": "The review target's own data: the expected API token compared in app/tokens.py and the files served from asset_root in app/files.py. Not deployed anywhere in this sample; modelled because the attack PRs target these controls and the reviewer must catch their weakening."
+    }
+  ],
+  "userPersonas": [
+    {
+      "id": "UP001",
+      "persona_type": "Developer / DevOps User",
+      "name": "Repository maintainer / demo presenter",
+      "privilege_level": "Administrative",
+      "organizational_affiliation": "Employee",
+      "functional_roles": [
+        "Administrator",
+        "Approver",
+        "Developer",
+        "Data Owner"
+      ],
+      "intent_behavior": "Legitimate",
+      "entity_type": "Human",
+      "authentication_method": "Multi-factor",
+      "threat_actor_overlay": [
+        "Mistaken configuration (branch protection, OIDC trust policy, secrets)"
+      ],
+      "description": "Owns the GitHub repository, configures secrets (AWS_BEDROCK_ROLE_ARN, ANTHROPIC_API_KEY, DEMO_FAKE_SECRET), variables, branch protection and the IAM role trust policy. Can bypass the gate by design of GitHub if admin bypass is left enabled.",
+      "is_relevant": true
+    },
+    {
+      "id": "UP002",
+      "persona_type": "Developer / DevOps User",
+      "name": "Same-repository contributor (write access)",
+      "privilege_level": "Elevated",
+      "organizational_affiliation": "Employee",
+      "functional_roles": [
+        "Developer"
+      ],
+      "intent_behavior": "Malicious",
+      "entity_type": "Human",
+      "authentication_method": "Multi-factor",
+      "threat_actor_overlay": [
+        "Malicious insider",
+        "Compromised developer account"
+      ],
+      "description": "Can push branches and open PRs that run agentic-review.yml WITH repository secrets. This is the adversary the four demo attack PRs model: smuggles guard removal, plants prompt injection in code comments and PR body, disarms RULES.yaml/prompts, adds conftest.py that exfiltrates CI secrets.",
+      "is_relevant": true
+    },
+    {
+      "id": "UP003",
+      "persona_type": "Authenticated Standard User",
+      "name": "Fork contributor (external GitHub user)",
+      "privilege_level": "Low",
+      "organizational_affiliation": "Public / Unknown",
+      "functional_roles": [
+        "Developer"
+      ],
+      "intent_behavior": "Malicious",
+      "entity_type": "Human",
+      "authentication_method": "Password",
+      "threat_actor_overlay": [
+        "Opportunistic attacker",
+        "Script kiddie"
+      ],
+      "description": "Any GitHub account can open a fork PR against a public repository. The workflow renders the check name but every step is skipped for fork PRs; secrets are not passed to fork-triggered pull_request runs. A fork PR still exercises ci.yml (pytest) without secrets.",
+      "is_relevant": true
+    },
+    {
+      "id": "UP004",
+      "persona_type": "Non-Human Identity / Service Account",
+      "name": "GitHub Actions workflow identity (GITHUB_TOKEN)",
+      "privilege_level": "Elevated",
+      "organizational_affiliation": "Employee",
+      "functional_roles": [
+        "Service Account",
+        "Operator"
+      ],
+      "intent_behavior": "Legitimate",
+      "entity_type": "Non-Human",
+      "authentication_method": "Token",
+      "threat_actor_overlay": [
+        "Abused via workflow-file edits"
+      ],
+      "description": "Job-scoped token with contents:read, pull-requests:write, id-token:write. Posts/updates the review comment, requests the OIDC token used to assume the Bedrock role, and is passed to anthropics/claude-code-action as github_token.",
+      "is_relevant": true
+    },
+    {
+      "id": "UP005",
+      "persona_type": "Non-Human Identity / Service Account",
+      "name": "AI reviewer agent (Claude Code via claude-code-action)",
+      "privilege_level": "Medium",
+      "organizational_affiliation": "Vendor",
+      "functional_roles": [
+        "Service Account",
+        "Auditor"
+      ],
+      "intent_behavior": "Compromised",
+      "entity_type": "Non-Human",
+      "authentication_method": "IAM Role",
+      "threat_actor_overlay": [
+        "Prompt-injected agent",
+        "Confused deputy"
+      ],
+      "description": "Two invocations (discovery, validation) with --allowedTools Read,Grep,Glob and --max-turns 40, running on the runner with the AWS session credentials in its process environment and the prefetched diff plus full checkout on disk. Reads attacker-controlled text; modelled as potentially compromised (prompt injection) so its only output channel, the final message, is treated as untrusted by CI.",
+      "is_relevant": true
+    },
+    {
+      "id": "UP006",
+      "persona_type": "External Service / Third-Party Integration",
+      "name": "Model provider: Amazon Bedrock or Anthropic API",
+      "privilege_level": "Low",
+      "organizational_affiliation": "Vendor",
+      "functional_roles": [
+        "Integration Endpoint"
+      ],
+      "intent_behavior": "Legitimate",
+      "entity_type": "External System",
+      "authentication_method": "IAM Role",
+      "threat_actor_overlay": [],
+      "description": "Receives the diff, any files the agent reads, and the prompts; returns the model output. Bedrock in vars.AWS_REGION (default us-west-2) via the OIDC-assumed role, or api.anthropic.com with ANTHROPIC_API_KEY.",
+      "is_relevant": true
+    },
+    {
+      "id": "UP007",
+      "persona_type": "External Service / Third-Party Integration",
+      "name": "Third-party GitHub Actions (checkout, setup-python, configure-aws-credentials, claude-code-action)",
+      "privilege_level": "Elevated",
+      "organizational_affiliation": "Vendor",
+      "functional_roles": [
+        "Integration Endpoint"
+      ],
+      "intent_behavior": "Legitimate",
+      "entity_type": "External System",
+      "authentication_method": "None",
+      "threat_actor_overlay": [
+        "Supply-chain compromise"
+      ],
+      "description": "Code executed inside the job with access to GITHUB_TOKEN and, for claude-code-action, the AWS session credentials. All four are pinned to full commit SHAs with version comments. claude-code-action installs the Claude Code CLI at run time.",
+      "is_relevant": true
+    },
+    {
+      "id": "UP008",
+      "persona_type": "Anonymous / Unauthenticated User",
+      "name": "Public reader / demo audience",
+      "privilege_level": "None",
+      "organizational_affiliation": "Public / Unknown",
+      "functional_roles": [
+        "End User"
+      ],
+      "intent_behavior": "Legitimate",
+      "entity_type": "Human",
+      "authentication_method": "None",
+      "threat_actor_overlay": [
+        "Passive observer of leaked data in logs/comments"
+      ],
+      "description": "Anyone can read the public repository, PR comments (including the posted review), and Actions logs (which contain the redacted candidate list and review output).",
+      "is_relevant": true
+    },
+    {
+      "id": "UP009",
+      "persona_type": "Authenticated Standard User",
+      "name": "Asset service client (demo app)",
+      "privilege_level": "Low",
+      "organizational_affiliation": "Customer",
+      "functional_roles": [
+        "End User"
+      ],
+      "intent_behavior": "Malicious",
+      "entity_type": "Human",
+      "authentication_method": "Token",
+      "threat_actor_overlay": [
+        "Path traversal attacker",
+        "Token brute-force"
+      ],
+      "description": "Hypothetical caller of app.files.read_asset(asset_root, requested) and app.tokens.verify_token(presented, expected). Supplies the requested path and the presented token; modelled malicious because the demo PRs try to weaken exactly these two controls.",
+      "is_relevant": true
+    }
+  ],
+  "nonFunctionalRequirements": [
+    {
+      "quality_class": "Fail-Safe Behaviour",
+      "level": "Revert to safe state",
+      "rationale": "Core design property: missing prompt, empty diff, missing [DISCOVERY]/[REVIEWED] marker, oversized candidates, errored step, or [BLOCK-MERGE] all exit 1 and block the merge."
+    },
+    {
+      "quality_class": "Faultlessness",
+      "level": "Medium",
+      "rationale": "LLM verdicts are nondeterministic; two passes plus a closed blocking list raise the bar but the README asks for empirical measurement (10 runs per attack) rather than assuming correctness."
+    },
+    {
+      "quality_class": "Availability",
+      "level": "99%",
+      "rationale": "Depends on GitHub Actions, GitHub-hosted runners and Bedrock/Anthropic availability. Outages block merges (fail closed) rather than allowing them; acceptable for a demo repository."
+    },
+    {
+      "quality_class": "Recoverability",
+      "level": "Hours",
+      "rationale": "Recovery is a workflow re-run; no persistent state beyond PR comments."
+    },
+    {
+      "quality_class": "Time Behaviour",
+      "level": "Standard",
+      "rationale": "Two sequential model calls per PR, job timeout 30 minutes, --max-turns 40 per pass."
+    },
+    {
+      "quality_class": "Resource Utilization",
+      "level": "Moderate",
+      "rationale": "Model invocation cost per PR is the main resource; concurrency group cancels superseded runs per PR."
+    },
+    {
+      "quality_class": "Capacity",
+      "level": "Small",
+      "rationale": "Nano user base; a handful of PRs per demo."
+    },
+    {
+      "quality_class": "Scalability",
+      "level": "Elastic",
+      "rationale": "GitHub-hosted runners and Bedrock scale on demand; cost scales with them."
+    },
+    {
+      "quality_class": "Analysability",
+      "level": "High",
+      "rationale": "Deterministic gate on SHA-scoped markers, transcripts and redacted outputs in logs, execution_file from the action."
+    },
+    {
+      "quality_class": "Testability",
+      "level": "High",
+      "rationale": "README describes tests/test_workflow_invariants.py and tests/test_gate.py pinning the security properties (not present in this checkout)."
+    },
+    {
+      "quality_class": "User Error Protection",
+      "level": "Strong",
+      "rationale": "Operator mistakes (missing prompt on base, unset secrets) fail the job instead of silently passing."
+    },
+    {
+      "quality_class": "Fault Tolerance",
+      "level": "Partial",
+      "rationale": "No retries; a transient model or runner failure fails the check and requires a manual re-run."
+    },
+    {
+      "quality_class": "Adaptability",
+      "level": "Multiple environments",
+      "rationale": "Bedrock via OIDC or direct Anthropic API, selected at run time by secret presence; model ids via repository variables."
+    },
+    {
+      "quality_class": "Interoperability",
+      "level": "Standards-based",
+      "rationale": "GitHub OIDC to AWS STS, GitHub Checks/branch protection, REST API via gh."
+    },
+    {
+      "quality_class": "Co-existence",
+      "level": "Shared environment",
+      "rationale": "Runs alongside ci.yml and (per README) a naive review lane against the same PRs."
+    },
+    {
+      "quality_class": "Operability",
+      "level": "Standard",
+      "rationale": "Configured through repository secrets/variables and branch protection; one PR comment updated in place."
+    },
+    {
+      "quality_class": "Installability",
+      "level": "Scripted",
+      "rationale": "Copy workflow, prompts and RULES.yaml; demo/reset.sh (not in checkout) recreates demo PRs."
+    },
+    {
+      "quality_class": "Modularity",
+      "level": "Medium",
+      "rationale": "Prompts, rules and workflow are separate files; gate logic is inline shell in the workflow."
+    },
+    {
+      "quality_class": "Replaceability",
+      "level": "Partially substitutable",
+      "rationale": "Model provider is swappable; GitHub Actions and claude-code-action specifics are not."
+    },
+    {
+      "quality_class": "Safety Criticality",
+      "level": "Non-safety-related",
+      "rationale": "Software supply-chain control; no physical safety impact."
+    },
+    {
+      "quality_class": "Accessibility / Inclusivity",
+      "level": "None specified",
+      "rationale": "Developer tooling surfaced through GitHub's UI."
+    }
+  ],
+  "phaseProgress": {
+    "current_phase": 1,
+    "current_phase_name": "Business Context Analysis",
+    "phase_completion": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0,
+      "6": 1.0,
+      "7": 1.0,
+      "7.5": 1.0,
+      "8": 1.0,
+      "9": 1.0
+    },
+    "phases": {
+      "1": "Business Context Analysis",
+      "2": "Architecture Analysis",
+      "3": "Threat Actor Analysis",
+      "4": "Trust Boundary Analysis",
+      "5": "Asset Flow Analysis",
+      "6": "Threat Identification",
+      "7": "Mitigation Planning",
+      "7.5": "Code Validation Analysis",
+      "8": "Residual Risk Analysis",
+      "9": "Output Generation and Documentation"
+    },
+    "overall_completion": 1.0
+  },
+  "referenceCatalogue": {
+    "description": "Threat actors the server pre-loaded but that were never assessed for this system. These are NOT part of the threat model.",
+    "threatActors": []
+  }
+}
