@@ -1,0 +1,3 @@
+# Require owner review for the review gate and its policy.
+/.github/** @bgaechter
+/RULES.yaml @bgaechter
