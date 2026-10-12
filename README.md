@@ -1,5 +1,7 @@
 # Sample Agentic Code Review Gate
 
+> **Non-production sample:** This is sample code for demonstration and educational purposes only. It is not intended for production use and should not be deployed without additional security review and testing.
+
 This repository demonstrates how to implement an agentic code review gate.
 
 > An AI code reviewer is a privileged principal that reads attacker-controlled
@@ -53,5 +55,7 @@ reviewer enforces: `no-guard-removal`, `no-secret-logging`,
 
 ## License
 
-Apache-2.0. Review prompts adapted from KiroCrew's `.github/review-prompts/`
-(Apache-2.0, © the KiroCrew contributors).
+Apache-2.0. Review prompts adapted from
+[KiroCrew](https://github.com/kirodotdev/KiroCrew) (Apache-2.0, Copyright
+Amazon.com, Inc. or its affiliates). See
+[THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) for attribution and license details.
