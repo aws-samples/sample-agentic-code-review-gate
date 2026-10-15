@@ -33,7 +33,7 @@ reviewer enforces: `no-guard-removal`, `no-secret-logging`,
 
 ## Setting it up on GitHub
 
-1. Create an empty repository and push `main` and the four `attack/*` tags.
+1. Create an empty repository and push `main`.
 2. Auth for the model calls:
    - **Amazon Bedrock:** create an IAM role trusted by GitHub's
      OIDC provider for this repository with `bedrock:InvokeModel*` on the
